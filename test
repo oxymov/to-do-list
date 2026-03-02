@@ -65,7 +65,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.geometry("1650x1000")
         
         self.regles_actives = self.charger_config()
-        self.fichiers_selectionnes = [] # Ceci est maintenant notre file d'attente
+        self.fichiers_selectionnes = [] # File d'attente des PDF
         self.db_lignes = [] 
         self.fichiers_visibles_set = set()
         self.gauss_details = {}
@@ -199,7 +199,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(self.tab_params, text="Sauvegarder la Configuration", command=self.sauvegarder_params, height=40, fg_color="#1565C0").pack(pady=20)
 
     # --------------------------------------------------------------------------
-    # UI ANALYSE (MISE A JOUR FILE D'ATTENTE)
+    # UI ANALYSE (AVEC GESTION FILE D'ATTENTE)
     # --------------------------------------------------------------------------
     def setup_analyse_ui(self):
         self.tab_analyse.grid_columnconfigure(0, weight=1)
@@ -211,7 +211,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         fr_actions = ctk.CTkFrame(top, fg_color="transparent")
         fr_actions.pack(side="left", padx=5)
         
-        # Nouveaux boutons pour la file d'attente
+        # Nouveaux boutons pour la gestion des PDF
         ctk.CTkButton(fr_actions, text="📄 Fichiers", command=self.choisir_fichiers, width=80).pack(side="left", padx=2)
         ctk.CTkButton(fr_actions, text="📁 Dossier", command=self.choisir_dossier, width=80).pack(side="left", padx=2)
         ctk.CTkButton(fr_actions, text="❌ Vider", command=self.vider_file, fg_color="#E74C3C", hover_color="#C0392B", width=60).pack(side="left", padx=2)
@@ -269,7 +269,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree.bind("<Double-1>", lambda event: self.editer_selection())
 
     # --------------------------------------------------------------------------
-    # LOGIQUE DE LA FILE D'ATTENTE (NOUVEAU)
+    # LOGIQUE DE LA FILE D'ATTENTE
     # --------------------------------------------------------------------------
     def update_queue_label(self):
         if hasattr(self, 'lbl_queue'):
@@ -277,7 +277,7 @@ class AnalyseurFiltresApp(ctk.CTk):
 
     def choisir_fichiers(self):
         fs = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
-        if fs: 
+        if fs:
             for f in fs:
                 if f not in self.fichiers_selectionnes:
                     self.fichiers_selectionnes.append(f)
@@ -299,8 +299,6 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.update_queue_label()
             if nouveaux > 0:
                 messagebox.showinfo("Dossier", f"{nouveaux} nouveaux PDF ajoutés à la file d'attente.")
-            else:
-                messagebox.showinfo("Dossier", "Aucun nouveau fichier PDF trouvé dans ce dossier.")
 
     def vider_file(self):
         if messagebox.askyesno("Confirmer", "Voulez-vous vider la file d'attente et effacer les résultats actuels ?"):
@@ -426,7 +424,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         ctk.CTkLabel(top_c, text="Historique & Comparaison des Dérives", font=("Arial", 16, "bold"), text_color="#0033A0").pack(side="left")
         
-        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers (Ajustement)", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
+        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Charger un Export (.json)", font=("Arial", 12, "bold"), fg_color="#0033A0", hover_color="#002277", command=self.charger_fichier_comparaison).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Effacer", fg_color="#C0392B", width=80, command=self.effacer_comparaisons).pack(side="right", padx=5)
 
@@ -568,7 +566,8 @@ class AnalyseurFiltresApp(ctk.CTk):
     def ouvrir_comparateur_delta(self):
         filepaths = filedialog.askopenfilenames(title="Sélectionnez EXACTEMENT 2 fichiers d'export JSON", filetypes=[("Fichier QualiData JSON", "*.json")])
         if len(filepaths) != 2:
-            messagebox.showwarning("Attention", "Veuillez sélectionner exactement 2 fichiers JSON pour calculer la différence.")
+            if len(filepaths) > 0:
+                messagebox.showwarning("Attention", "Veuillez sélectionner exactement 2 fichiers JSON pour calculer la différence.")
             return
         
         try:
@@ -637,8 +636,12 @@ class AnalyseurFiltresApp(ctk.CTk):
                 if "Tension" in p_label and "WIDEBAND" in key[0]:
                     continue
                     
-                v1_str = r1.get(p_key, "N/A")
-                v2_str = r2.get(p_key, "N/A")
+                if p_key == "MSE" and "IEPE" in p_label:
+                    v1_str = r1.get("IEPE_MSE", r1.get("MSE", "N/A"))
+                    v2_str = r2.get("IEPE_MSE", r2.get("MSE", "N/A"))
+                else:
+                    v1_str = r1.get(p_key, "N/A")
+                    v2_str = r2.get(p_key, "N/A")
                 
                 try: val1 = float(str(v1_str).replace(',', '.').replace('⚠️ ', ''))
                 except: val1 = None
@@ -1101,8 +1104,18 @@ class AnalyseurFiltresApp(ctk.CTk):
         f = list(set([r["Fichier"] for r in self.db_lignes]))
         self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
 
+    def lancer_thread(self):
+        if self.fichiers_selectionnes:
+            self.btn_run.configure(state="disabled")
+            self.progress.pack(fill="x")
+            threading.Thread(target=self.process, daemon=True).start()
+        else:
+            messagebox.showinfo("Info", "Veuillez d'abord ajouter des fichiers (Fichiers ou Dossier).")
+
     def process(self):
         total = len(self.fichiers_selectionnes)
+        self.db_lignes = [] 
+        
         for idx, fpath in enumerate(self.fichiers_selectionnes):
             fname = os.path.basename(fpath)
             temp_buffer = {} 
@@ -1111,7 +1124,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             try:
                 with pdfplumber.open(fpath) as pdf:
                     for page in pdf.pages:
-                        text = page.extract_text(layout=True); 
+                        text = page.extract_text(layout=True)
                         if not text: continue
                         lines = text.split('\n')
                         
@@ -1134,7 +1147,8 @@ class AnalyseurFiltresApp(ctk.CTk):
                             
                             if match_10 or match_2:
                                 span_k = "10.0" if match_10 else "2.0"
-                                parts = line.split(); key = (fname, c_filt, c_inp)
+                                parts = line.split()
+                                key = (fname, c_filt, c_inp)
                                 if key not in temp_buffer: temp_buffer[key] = {"10.0": {}, "2.0": {}}
                                 
                                 nb = len(parts)
@@ -1169,13 +1183,19 @@ class AnalyseurFiltresApp(ctk.CTk):
                 
                 row_data["Fichier"] = key[0]; row_data["Filter"] = key[1]; row_data["Input"] = key[2]
                 row_data["uuid"] = str(uuid.uuid4())
-                row_c, tag = self.calculer_champs(row_data); row_c["tag"] = tag; self.db_lignes.append(row_c)
+                row_c, tag = self.calculer_champs(row_data)
+                row_c["tag"] = tag
+                
+                self.db_lignes.append(row_c)
                 
             self.after(0, self.progress.set, (idx+1)/total)
+        
         self.after(0, self.finish)
 
     def finish(self):
-        self.btn_run.configure(state="normal"); self.progress.pack_forget(); self.update_combos_fichiers()
+        self.btn_run.configure(state="normal")
+        self.progress.pack_forget()
+        self.update_combos_fichiers()
         self.appliquer_filtres_visuels(None) 
         self.after(500, lambda: [self.verifier_integrite_inputs(), self.calculer_et_afficher_incertitudes(), self.calculer_et_afficher_gauss()])
 
