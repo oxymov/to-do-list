@@ -7,16 +7,18 @@ import uuid
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Gestionnaire de Projets Pro", page_icon="🚀", layout="wide")
 
-# --- INITIALISATION DES DONNÉES (Session State) ---
+# --- INITIALISATION DES DONNÉES ---
 if "projects" not in st.session_state:
     st.session_state.projects = ["Projet Alpha"]
 if "categories" not in st.session_state:
     st.session_state.categories = ["Développement", "Design", "Marketing", "Administratif"]
 if "tasks" not in st.session_state:
     st.session_state.tasks = []
+if "editing_task_id" not in st.session_state:
+    st.session_state.editing_task_id = None
 
 # --- FONCTIONS UTILITAIRES ---
-def add_task(project, category, name, desc, tools, priority, start_date, deadline, people):
+def add_task(project, category, name, desc, tools, priority, start_date, deadline, people, color):
     st.session_state.tasks.append({
         "id": str(uuid.uuid4()),
         "project": project,
@@ -28,16 +30,15 @@ def add_task(project, category, name, desc, tools, priority, start_date, deadlin
         "start_date": start_date,
         "deadline": deadline,
         "people": people,
-        "status": "En cours"
+        "color": color,
+        "status": "En cours",
+        "comment": "",
+        "file_name": None,
+        "file_data": None
     })
 
 def delete_task(task_id):
     st.session_state.tasks = [t for t in st.session_state.tasks if t["id"] != task_id]
-
-def mark_done(task_id):
-    for t in st.session_state.tasks:
-        if t["id"] == task_id:
-            t["status"] = "Terminé"
 
 def get_priority_badge(level):
     badges = {
@@ -51,7 +52,6 @@ def get_priority_badge(level):
 # --- INTERFACE UTILISATEUR ---
 st.title("🚀 Mon Espace Projets")
 
-# Sidebar pour la navigation
 menu = st.sidebar.radio("Navigation", ["📋 Gestion des Tâches", "📊 Dashboard (Avancement)", "📅 Diagramme de Gantt"])
 
 st.sidebar.markdown("---")
@@ -89,47 +89,64 @@ if menu == "📋 Gestion des Tâches":
             with col3:
                 t_start = st.date_input("Date de début", datetime.date.today())
                 t_deadline = st.date_input("Date butoir", datetime.date.today() + datetime.timedelta(days=7))
+                t_color = st.color_picker("Couleur dans le Gantt", "#007bff")
             
             t_desc = st.text_area("Description")
             
-            submitted = st.form_submit_button("Enregistrer la tâche")
-            if submitted:
+            if st.form_submit_button("Enregistrer la tâche"):
                 if t_name:
-                    add_task(t_project, t_category, t_name, t_desc, t_tools, t_priority, t_start, t_deadline, t_people)
+                    add_task(t_project, t_category, t_name, t_desc, t_tools, t_priority, t_start, t_deadline, t_people, t_color)
                     st.success("Tâche ajoutée avec succès !")
+                    st.rerun()
                 else:
                     st.error("Le nom de la tâche est obligatoire.")
 
     st.markdown("---")
     
-    # Filtres d'affichage
+    # Filtres
     f_project = st.selectbox("Filtrer par projet", ["Tous"] + st.session_state.projects)
-    
-    # Affichage des tâches
     tasks_to_display = [t for t in st.session_state.tasks if f_project == "Tous" or t["project"] == f_project]
     
     if not tasks_to_display:
         st.info("Aucune tâche à afficher pour le moment.")
     else:
         for t in tasks_to_display:
-            # Calcul de l'urgence (< 4 jours)
+            # Mode Édition
+            if st.session_state.editing_task_id == t["id"]:
+                st.markdown(f"### ✏️ Modification de : {t['name']}")
+                with st.form(f"edit_form_{t['id']}"):
+                    e_name = st.text_input("Nom", t['name'])
+                    e_desc = st.text_area("Description", t['description'])
+                    e_tools = st.text_input("Outils", t['tools'])
+                    e_people = st.text_input("Personnes", t['people'])
+                    e_color = st.color_picker("Couleur Gantt", t.get('color', '#007bff'))
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.form_submit_button("💾 Sauvegarder"):
+                            t['name'], t['description'], t['tools'], t['people'], t['color'] = e_name, e_desc, e_tools, e_people, e_color
+                            st.session_state.editing_task_id = None
+                            st.rerun()
+                    with c2:
+                        if st.form_submit_button("❌ Annuler"):
+                            st.session_state.editing_task_id = None
+                            st.rerun()
+                continue # Passe à la tâche suivante sans afficher la vue normale
+
+            # Calcul des alertes
             days_left = (t["deadline"] - datetime.date.today()).days
             is_urgent = (0 <= days_left < 4) and t["status"] != "Terminé"
             is_overdue = days_left < 0 and t["status"] != "Terminé"
             
-            # Application de la couleur d'alerte rouge
             bg_color = "#ffe6e6" if is_urgent or is_overdue else "transparent"
             border_color = "red" if is_urgent or is_overdue else "#ddd"
             
             with st.container():
-                st.markdown(
-                    f"""
+                st.markdown(f"""
                     <div style="background-color: {bg_color}; border: 1px solid {border_color}; padding: 15px; border-radius: 10px; margin-bottom: 10px;">
                         <h4 style="margin:0;">{t['name']} <span style="font-size: 0.8em; font-weight: normal;">({t['status']})</span></h4>
                     </div>
-                    """, 
-                    unsafe_allow_html=True
-                )
+                """, unsafe_allow_html=True)
                 
                 c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
                 with c1:
@@ -141,46 +158,62 @@ if menu == "📋 Gestion des Tâches":
                 with c3:
                     st.write(f"**Début:** {t['start_date']}")
                     if is_overdue:
-                        st.error(f"**Échéance:** {t['deadline']} (En retard!)")
+                        st.error(f"**Échéance:** {t['deadline']} (Retard!)")
                     elif is_urgent:
                         st.warning(f"**Échéance:** {t['deadline']} (J-{days_left})")
                     else:
                         st.write(f"**Échéance:** {t['deadline']}")
                 with c4:
-                    if t["status"] != "Terminé":
-                        if st.button("✅ Terminer", key=f"done_{t['id']}"):
-                            mark_done(t["id"])
-                            st.rerun()
+                    if st.button("✏️ Modifier", key=f"edit_{t['id']}"):
+                        st.session_state.editing_task_id = t["id"]
+                        st.rerun()
                     if st.button("🗑️ Supprimer", key=f"del_{t['id']}"):
                         delete_task(t["id"])
                         st.rerun()
+                
+                # Gestion de la clôture (Fichiers & Commentaires)
+                if t["status"] != "Terminé":
+                    with st.expander("✅ Clôturer la tâche (Rendu & Commentaire)"):
+                        finish_comment = st.text_area("Commentaire de fin", key=f"fc_{t['id']}")
+                        finish_file = st.file_uploader("Joindre le rendu final (Optionnel)", key=f"file_{t['id']}")
+                        
+                        if st.button("Valider la fin de tâche", key=f"done_{t['id']}"):
+                            t["status"] = "Terminé"
+                            t["comment"] = finish_comment
+                            if finish_file:
+                                t["file_name"] = finish_file.name
+                                t["file_data"] = finish_file.getvalue()
+                            st.rerun()
+                else:
+                    # Affichage du rendu si la tâche est terminée
+                    st.success(f"**Commentaire de clôture :** {t['comment'] if t['comment'] else 'Aucun commentaire'}")
+                    if t.get("file_name"):
+                        st.download_button(
+                            label=f"💾 Télécharger le rendu ({t['file_name']})",
+                            data=t["file_data"],
+                            file_name=t["file_name"],
+                            mime="application/octet-stream",
+                            key=f"dl_{t['id']}"
+                        )
 
 # ==========================================
-# VUE 2 : DASHBOARD (CAMEMBERT)
+# VUE 2 : DASHBOARD
 # ==========================================
 elif menu == "📊 Dashboard (Avancement)":
     st.header("Tableau de bord Global")
-    
     if not st.session_state.tasks:
         st.warning("Ajoutez des tâches pour voir les statistiques.")
     else:
         df = pd.DataFrame(st.session_state.tasks)
-        
         col1, col2 = st.columns(2)
-        
         with col1:
-            st.subheader("État des tâches (Global)")
-            status_counts = df['status'].value_counts().reset_index()
-            status_counts.columns = ['Statut', 'Nombre']
-            fig_pie = px.pie(status_counts, values='Nombre', names='Statut', hole=0.4, 
-                             color='Statut', color_discrete_map={"Terminé": "#28a745", "En cours": "#ffc107"})
+            st.subheader("État des tâches")
+            fig_pie = px.pie(df, names='status', hole=0.4, color='status', 
+                             color_discrete_map={"Terminé": "#28a745", "En cours": "#ffc107"})
             st.plotly_chart(fig_pie, use_container_width=True)
-            
         with col2:
             st.subheader("Répartition par Projet")
-            proj_counts = df['project'].value_counts().reset_index()
-            proj_counts.columns = ['Projet', 'Nombre']
-            fig_bar = px.bar(proj_counts, x='Projet', y='Nombre', color='Projet')
+            fig_bar = px.bar(df, x='project', color='project')
             st.plotly_chart(fig_bar, use_container_width=True)
 
 # ==========================================
@@ -193,28 +226,28 @@ elif menu == "📅 Diagramme de Gantt":
         st.warning("Ajoutez des tâches pour générer le diagramme de Gantt.")
     else:
         df = pd.DataFrame(st.session_state.tasks)
-        # Convertir en datetime pour Plotly
         df['start_date'] = pd.to_datetime(df['start_date'])
         df['deadline'] = pd.to_datetime(df['deadline'])
         
-        # Sélection du projet pour le Gantt
         gantt_proj = st.selectbox("Sélectionnez le projet à visualiser", ["Tous"] + st.session_state.projects)
-        
         if gantt_proj != "Tous":
             df = df[df['project'] == gantt_proj]
             
         if df.empty:
              st.info("Aucune tâche pour ce projet.")
         else:
+            # Création d'un dictionnaire de couleurs unique pour chaque tâche
+            color_mapping = {row['name']: row['color'] for index, row in df.iterrows()}
+            
             fig_gantt = px.timeline(
                 df, 
                 x_start="start_date", 
                 x_end="deadline", 
                 y="name", 
-                color="status",
-                hover_data=["priority", "people"],
-                color_discrete_map={"Terminé": "#28a745", "En cours": "#007bff"}
+                color="name", # On colore par nom de tâche
+                hover_data=["status", "priority", "people"],
+                color_discrete_map=color_mapping # On applique les couleurs choisies par l'utilisateur
             )
-            fig_gantt.update_yaxes(autorange="reversed") # Tâches dans l'ordre de création de haut en bas
-            fig_gantt.update_layout(xaxis_title="Date", yaxis_title="Tâches")
+            fig_gantt.update_yaxes(autorange="reversed")
+            fig_gantt.update_layout(xaxis_title="Date", yaxis_title="Tâches", showlegend=False)
             st.plotly_chart(fig_gantt, use_container_width=True)
