@@ -1,0 +1,1148 @@
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import pdfplumber
+import re
+import threading
+import os
+import json
+import math
+import uuid
+from datetime import datetime
+
+# ==============================================================================
+# 1. CONFIGURATION ET TOLÉRANCES
+# ==============================================================================
+DEFAUT_TOLERANCES_OPERET = {
+    "BESSEL": {
+        "TENSION": { "Gain": 0.0205, "MSE": 0.0586, "Ig": 0.147 },
+        "IEPE":    { "Gain": 0.0595, "MSE": 0.0586, "Ig": 0.185 }
+    },
+    "BUTTERWORTH": {
+        "TENSION": { "Gain": 0.0205, "MSE": 0.0586, "Ig": 0.134 },
+        "IEPE":    { "Gain": 0.0595, "MSE": 0.0586, "Ig": 0.174 }
+    },
+    "WIDEBAND": {
+        "TENSION": { "Gain": 0.0205, "MSE": 0.0586, "Ig": 0.147 },
+        "IEPE":    { "Gain": 0.0595, "MSE": 0.0586, "Ig": 0.185 }
+    }
+}
+
+REGLES_DEFAUT = {
+    "Nb_Inputs_Max": [8.0, 8.0],
+    "Offset": [-0.5, 0.5],
+    "DCGain": [-0.1, 0.1],
+    "SINL":   [0.0, 0.05],
+    "MSE":    [0.0, 0.5],
+    "Noise":  [0.0, 0.1],
+    "IEPE Comp": [23.0, 25.0],
+    "IEPE Gain": [-0.1, 0.1],
+    "Derive_Std": [0.0, 0.6],
+    "Derive_IEPE": [0.0, 0.5],
+    "OPERET": DEFAUT_TOLERANCES_OPERET
+}
+
+COLONNES_A_AFFICHER = [
+    "Offset", "DCGain", "SINL", "MSE", "BWdth", "CMRR", "Noise", "ACCpl",
+    "IEPE Comp", "IEPE Exc", "IEPE Gain",
+    "Derive_Std", "Derive_IEPE"
+]
+
+FICHIER_CONFIG = "config_tolerances.json"
+LISTE_FILTRES = ["Analog Anti Alias Bessel", "Analog Anti Alias Butterworth", "Wideband"]
+FILTRES_CIBLES = ["BESSEL", "BUTTERWORTH", "WIDEBAND"] 
+
+# ==============================================================================
+# 2. APPLICATION
+# ==============================================================================
+ctk.set_appearance_mode("Light")       
+ctk.set_default_color_theme("dark-blue") 
+
+class AnalyseurFiltresApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("QualiData Manager - Validation & Métrologie") 
+        self.geometry("1650x1000")
+        
+        self.regles_actives = self.charger_config()
+        self.fichiers_selectionnes = []
+        self.db_lignes = [] 
+        self.fichiers_visibles_set = set()
+        self.gauss_details = {}
+        self.tooltip_win = None
+
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # --- LES 6 ONGLETS ---
+        self.tab_analyse = self.tabview.add("Analyse Données")
+        self.tab_manquants = self.tabview.add("Rapport Manquants")
+        self.tab_incertitude = self.tabview.add("Calcul Incertitudes (OPERET)")
+        self.tab_gauss = self.tabview.add("📊 Distribution (Gauss)")
+        self.tab_comparaison = self.tabview.add("Comparaisons") 
+        self.tab_params = self.tabview.add("Paramètres")
+
+        self.setup_analyse_ui()
+        self.setup_missing_ui()
+        self.setup_incertitude_ui()
+        self.setup_gauss_ui() 
+        self.setup_comparaison_ui()
+        self.setup_params_ui()
+
+    # --------------------------------------------------------------------------
+    # CONFIGURATION
+    # --------------------------------------------------------------------------
+    def charger_config(self):
+        config = REGLES_DEFAUT.copy()
+        if "OPERET" not in config: config["OPERET"] = DEFAUT_TOLERANCES_OPERET
+        if "WIDEBAND" not in config.get("OPERET", {}):
+            config["OPERET"]["WIDEBAND"] = DEFAUT_TOLERANCES_OPERET["WIDEBAND"]
+
+        if os.path.exists(FICHIER_CONFIG):
+            try:
+                with open(FICHIER_CONFIG, 'r') as f:
+                    loaded = json.load(f)
+                    for k, v in loaded.items(): config[k] = v
+                    if "WIDEBAND" not in config["OPERET"]:
+                        config["OPERET"]["WIDEBAND"] = DEFAUT_TOLERANCES_OPERET["WIDEBAND"]
+            except: pass
+        return config
+
+    def sauvegarder_params(self):
+        try:
+            nouvelles = {}
+            for k, w in self.entries_params.items():
+                if k == "Nb_Inputs_Max":
+                    val = float(w['min'].get())
+                    nouvelles[k] = [val, val]
+                else:
+                    nouvelles[k] = [float(w['min'].get().replace(',', '.')), float(w['max'].get().replace(',', '.'))]
+            
+            nouvelles["OPERET"] = {}
+            for filt in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
+                nouvelles["OPERET"][filt] = {}
+                for mode in ["TENSION", "IEPE"]:
+                    nouvelles["OPERET"][filt][mode] = {}
+                    for param in ["Gain", "MSE", "Ig"]:
+                        val_str = self.entries_operet[filt][mode][param].get()
+                        nouvelles["OPERET"][filt][mode][param] = float(val_str.replace(',', '.'))
+
+            self.regles_actives = nouvelles
+            with open(FICHIER_CONFIG, 'w') as f: json.dump(nouvelles, f, indent=4)
+            self.recalculer_tout_db()
+            messagebox.showinfo("Succès", "Configuration sauvegardée !")
+        except Exception as e: messagebox.showerror("Erreur", f"Erreur : {e}")
+
+    def setup_params_ui(self):
+        fs = ctk.CTkScrollableFrame(self.tab_params, fg_color="transparent")
+        fs.pack(fill="both", expand=True, padx=20, pady=20)
+        self.entries_params = {}
+        
+        fr_gen = ctk.CTkFrame(fs, fg_color="#D6EAF8")
+        fr_gen.pack(fill="x", pady=(0, 20))
+        ctk.CTkLabel(fr_gen, text="Nombre d'Inputs par Carte :", font=("Arial", 12, "bold")).pack(side="left", padx=10, pady=10)
+        e_nb = ctk.CTkEntry(fr_gen, width=60)
+        e_nb.insert(0, str(int(self.regles_actives.get("Nb_Inputs_Max", [8.0])[0])))
+        e_nb.pack(side="left", padx=5)
+        self.entries_params["Nb_Inputs_Max"] = {'min': e_nb, 'max': e_nb}
+
+        fr_op = ctk.CTkFrame(fs, fg_color="#EAFAF1")
+        fr_op.pack(fill="x", pady=(0, 20))
+        ctk.CTkLabel(fr_op, text="Tolérances OPERET (+/- %)", font=("Arial", 14, "bold"), text_color="#196F3D").pack(pady=10)
+        
+        self.entries_operet = {}
+        grid_fr = ctk.CTkFrame(fr_op, fg_color="transparent")
+        grid_fr.pack(padx=20, pady=10)
+
+        ctk.CTkLabel(grid_fr, text="Paramètre", font=("Arial", 11, "bold")).grid(row=0, column=2)
+        ctk.CTkLabel(grid_fr, text="BESSEL", font=("Arial", 12, "bold")).grid(row=0, column=3, padx=10)
+        ctk.CTkLabel(grid_fr, text="BUTTERWORTH", font=("Arial", 12, "bold")).grid(row=0, column=4, padx=10)
+        ctk.CTkLabel(grid_fr, text="WIDEBAND", font=("Arial", 12, "bold")).grid(row=0, column=5, padx=10)
+
+        row_idx = 1
+        tols_actuelles = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+        self.entries_operet = {"BESSEL": {"TENSION":{}, "IEPE":{}}, "BUTTERWORTH": {"TENSION":{}, "IEPE":{}}, "WIDEBAND": {"TENSION":{}, "IEPE":{}}}
+
+        for mode in ["TENSION", "IEPE"]:
+            ctk.CTkLabel(grid_fr, text=f"--- {mode} ---", font=("Arial", 11, "bold")).grid(row=row_idx, column=2, pady=(10,5))
+            row_idx += 1
+            for param in ["Gain", "MSE", "Ig"]:
+                ctk.CTkLabel(grid_fr, text=param).grid(row=row_idx, column=2, sticky="e", padx=5)
+                
+                # Bessel
+                e_bes = ctk.CTkEntry(grid_fr, width=70)
+                e_bes.insert(0, str(tols_actuelles["BESSEL"][mode][param]))
+                e_bes.grid(row=row_idx, column=3, pady=2)
+                self.entries_operet["BESSEL"][mode][param] = e_bes
+                
+                # Butterworth
+                e_but = ctk.CTkEntry(grid_fr, width=70)
+                e_but.insert(0, str(tols_actuelles["BUTTERWORTH"][mode][param]))
+                e_but.grid(row=row_idx, column=4, pady=2)
+                self.entries_operet["BUTTERWORTH"][mode][param] = e_but
+                
+                # Wideband
+                e_wid = ctk.CTkEntry(grid_fr, width=70)
+                e_wid.insert(0, str(tols_actuelles["WIDEBAND"][mode][param]))
+                e_wid.grid(row=row_idx, column=5, pady=2)
+                self.entries_operet["WIDEBAND"][mode][param] = e_wid
+                
+                row_idx += 1
+
+        ctk.CTkLabel(fs, text="Seuils de Tolérance Unitaire (Onglet Analyse)", font=("Arial", 14, "bold")).pack(anchor="w", pady=5)
+        for k in sorted(self.regles_actives.keys()):
+            if k in ["Nb_Inputs_Max", "OPERET"]: continue
+            r = ctk.CTkFrame(fs, fg_color="white")
+            r.pack(fill="x", pady=2)
+            ctk.CTkLabel(r, text=k, width=150).pack(side="left")
+            e1 = ctk.CTkEntry(r, width=80); e1.insert(0, str(self.regles_actives[k][0])); e1.pack(side="left", padx=5)
+            e2 = ctk.CTkEntry(r, width=80); e2.insert(0, str(self.regles_actives[k][1])); e2.pack(side="left", padx=5)
+            self.entries_params[k] = {'min': e1, 'max': e2}
+        
+        ctk.CTkButton(self.tab_params, text="Sauvegarder la Configuration", command=self.sauvegarder_params, height=40, fg_color="#1565C0").pack(pady=20)
+
+    # --------------------------------------------------------------------------
+    # UI ANALYSE
+    # --------------------------------------------------------------------------
+    def setup_analyse_ui(self):
+        self.tab_analyse.grid_columnconfigure(0, weight=1)
+        self.tab_analyse.grid_rowconfigure(1, weight=1)
+
+        top = ctk.CTkFrame(self.tab_analyse, height=80)
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+        
+        fr_actions = ctk.CTkFrame(top, fg_color="transparent")
+        fr_actions.pack(side="left", padx=5)
+        ctk.CTkButton(fr_actions, text="Choisir PDF", command=self.choisir_fichiers, width=100).pack(side="left", padx=2)
+        ctk.CTkButton(fr_actions, text="➕ Ajout", command=lambda: self.ouvrir_popup_edition(None), fg_color="#F39C12", width=70).pack(side="left", padx=2)
+        ctk.CTkButton(fr_actions, text="✏️ Modif", command=self.editer_selection, fg_color="#8E44AD", width=70).pack(side="left", padx=2)
+        ctk.CTkButton(fr_actions, text="🗑️ Suppr", command=self.supprimer_selection, fg_color="#C0392B", width=70).pack(side="left", padx=2)
+        
+        ctk.CTkButton(fr_actions, text="💾 Exporter...", command=self.ouvrir_popup_export, fg_color="#27AE60", width=90).pack(side="left", padx=10)
+
+        fr_filters = ctk.CTkFrame(top, fg_color="transparent")
+        fr_filters.pack(side="left", padx=20)
+        self.btn_filter_file = ctk.CTkButton(fr_filters, text="📂 Filtrer Fichiers...", command=self.ouvrir_selecteur_fichiers, width=150)
+        self.btn_filter_file.pack(side="left", padx=5)
+
+        self.var_filter_type = ctk.StringVar(value="Tous les filtres")
+        self.cb_type = ctk.CTkComboBox(fr_filters, variable=self.var_filter_type, values=["Tous les filtres"] + LISTE_FILTRES, width=200, command=self.appliquer_filtres_visuels)
+        self.cb_type.pack(side="left", padx=5)
+
+        ctk.CTkButton(fr_filters, text="Reset", command=self.reset_filters, width=50, fg_color="gray").pack(side="left", padx=5)
+
+        self.btn_run = ctk.CTkButton(top, text="▶ LANCER", command=self.lancer_thread, fg_color="#1565C0", width=100)
+        self.btn_run.pack(side="right", padx=10)
+
+        self.progress = ctk.CTkProgressBar(top)
+        self.progress.pack(side="bottom", fill="x")
+        self.progress.pack_forget()
+
+        frame_table = ctk.CTkFrame(self.tab_analyse, fg_color="transparent")
+        frame_table.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        
+        cols = ["ID", "Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER
+        self.tree = ttk.Treeview(frame_table, columns=cols, show="headings")
+        self.tree.column("ID", width=0, stretch=False)
+        for c in cols:
+            if c == "ID": continue
+            self.tree.heading(c, text=c)
+            if c == "Fichier": w = 150
+            elif c == "Filter": w = 180 
+            elif c in ["Input", "Span"]: w = 50 
+            elif c == "Etat": w = 60
+            else: w = 70
+            self.tree.column(c, width=w, anchor="center")
+        
+        vsb = ttk.Scrollbar(frame_table, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        self.tree.tag_configure("ok", background="#E6FFFA")
+        self.tree.tag_configure("error", background="#FDEDED")
+        self.tree.bind("<Double-1>", lambda event: self.editer_selection())
+
+    # --------------------------------------------------------------------------
+    # IMPORT / EXPORT LOGIC
+    # --------------------------------------------------------------------------
+    def ouvrir_popup_export(self):
+        if not self.db_lignes:
+            messagebox.showwarning("Vide", "Il n'y a aucune donnée à exporter.")
+            return
+
+        top_ex = ctk.CTkToplevel(self)
+        top_ex.title("Exporter les Données")
+        top_ex.geometry("500x500")
+        top_ex.attributes("-topmost", True)
+
+        ctk.CTkLabel(top_ex, text="Informations de l'Export", font=("Arial", 16, "bold"), text_color="#0033A0").pack(pady=15)
+
+        fichiers_uniques = list(set([row["Fichier"] for row in self.db_lignes]))
+        mat_prefill = ", ".join([f.replace('.pdf', '') for f in fichiers_uniques])
+
+        fr_m = ctk.CTkFrame(top_ex, fg_color="transparent"); fr_m.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(fr_m, text="Matériel concerné :", width=140, anchor="w").pack(side="left")
+        e_mat = ctk.CTkEntry(fr_m, width=280); e_mat.pack(side="left")
+        e_mat.insert(0, mat_prefill)
+
+        fr_a = ctk.CTkFrame(top_ex, fg_color="transparent"); fr_a.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(fr_a, text="Année étalonnage :", width=140, anchor="w").pack(side="left")
+        e_annee = ctk.CTkEntry(fr_a, width=280); e_annee.pack(side="left")
+        e_annee.insert(0, str(datetime.now().year))
+
+        fr_n = ctk.CTkFrame(top_ex, fg_color="transparent"); fr_n.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(fr_n, text="Nom / Auteur :", width=140, anchor="w").pack(side="left")
+        e_nom = ctk.CTkEntry(fr_n, width=280); e_nom.pack(side="left")
+
+        fr_d = ctk.CTkFrame(top_ex, fg_color="transparent"); fr_d.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(fr_d, text="Date Mesures :", width=140, anchor="w").pack(side="left")
+        e_date = ctk.CTkEntry(fr_d, width=280); e_date.pack(side="left")
+        e_date.insert(0, datetime.now().strftime("%d/%m/%Y"))
+
+        fr_c = ctk.CTkFrame(top_ex, fg_color="transparent"); fr_c.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(fr_c, text="Commentaire :", width=140, anchor="w").pack(side="left")
+        e_com = ctk.CTkEntry(fr_c, width=280); e_com.pack(side="left")
+
+        def valider_export():
+            file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Fichier JSON", "*.json")])
+            if file_path:
+                derives_export = []
+                tols_operet = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+                
+                for row in self.db_lignes:
+                    filt_name = str(row.get("Filter", "")).upper()
+                    if "BESSEL" in filt_name: filt_key = "BESSEL"
+                    elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
+                    else: filt_key = "WIDEBAND"
+
+                    inp = row.get("Input", "?")
+                    
+                    # Tension
+                    if filt_key in ["BESSEL", "BUTTERWORTH"]:
+                        t_tols = tols_operet[filt_key]["TENSION"]
+                        g_ten = self.parse_float(row.get("DCGain"))
+                        e_ten = self.parse_float(row.get("MSE"))
+                        im_ten = 2 * math.sqrt(g_ten**2 + e_ten**2)
+                        
+                        if abs(g_ten) > t_tols["Gain"]: derives_export.append(f"Input {inp} [{filt_key}] - TENSION Gain : {g_ten:.4f}% > Tol: {t_tols['Gain']}%")
+                        if abs(e_ten) > t_tols["MSE"]: derives_export.append(f"Input {inp} [{filt_key}] - TENSION MSE : {e_ten:.4f}% > Tol: {t_tols['MSE']}%")
+                        if im_ten > t_tols["Ig"]: derives_export.append(f"Input {inp} [{filt_key}] - TENSION I/M : {im_ten:.4f}% > Tol: {t_tols['Ig']}%")
+                    
+                    # IEPE uniquement pour WIDEBAND
+                    if filt_key == "WIDEBAND":
+                        i_tols = tols_operet[filt_key]["IEPE"]
+                        g_iepe = self.parse_float(row.get("IEPE Gain"))
+                        e_iepe_mse = self.parse_float(row.get("MSE")) 
+                        im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe_mse**2)
+                        
+                        if abs(g_iepe) > i_tols["Gain"]: derives_export.append(f"Input {inp} [WIDEBAND] - IEPE Gain : {g_iepe:.4f}% > Tol: {i_tols['Gain']}%")
+                        if abs(e_iepe_mse) > i_tols["MSE"]: derives_export.append(f"Input {inp} [WIDEBAND] - IEPE MSE : {e_iepe_mse:.4f}% > Tol: {i_tols['MSE']}%")
+                        if im_iepe > i_tols["Ig"]: derives_export.append(f"Input {inp} [WIDEBAND] - IEPE I/M : {im_iepe:.4f}% > Tol: {i_tols['Ig']}%")
+                
+                export_data = {
+                    "metadata": {
+                        "date_export": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        "materiel": e_mat.get(),
+                        "annee": e_annee.get(),
+                        "date_mesure": e_date.get(),
+                        "nom": e_nom.get(),
+                        "commentaire": e_com.get()
+                    },
+                    "bilan_conformite": {
+                        "statut_global": "HORS TOLERANCE" if derives_export else "CONFORME (OK)",
+                        "nombre_defauts": len(derives_export),
+                        "liste_defauts": derives_export
+                    },
+                    "tolerances": self.regles_actives,
+                    "data": self.db_lignes
+                }
+                
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(export_data, f, indent=4, ensure_ascii=False)
+                    messagebox.showinfo("Succès", "Données exportées avec succès !")
+                    top_ex.destroy()
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Erreur lors de l'export : {e}")
+
+        ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
+
+    # --------------------------------------------------------------------------
+    # UI COMPARAISON
+    # --------------------------------------------------------------------------
+    def setup_comparaison_ui(self):
+        top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
+        top_c.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(top_c, text="Historique & Comparaison des Dérives", font=("Arial", 16, "bold"), text_color="#0033A0").pack(side="left")
+        
+        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers (Ajustement)", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
+        ctk.CTkButton(top_c, text="Charger un Export (.json)", font=("Arial", 12, "bold"), fg_color="#0033A0", hover_color="#002277", command=self.charger_fichier_comparaison).pack(side="right", padx=10)
+        ctk.CTkButton(top_c, text="Effacer", fg_color="#C0392B", width=80, command=self.effacer_comparaisons).pack(side="right", padx=5)
+
+        self.comp_scroll = ctk.CTkScrollableFrame(self.tab_comparaison, orientation="horizontal")
+        self.comp_scroll.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def effacer_comparaisons(self):
+        for widget in self.comp_scroll.winfo_children():
+            widget.destroy()
+
+    def charger_fichier_comparaison(self):
+        filepaths = filedialog.askopenfilenames(filetypes=[("Fichier QualiData JSON", "*.json")])
+        if not filepaths: return
+
+        for path in filepaths:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                if "metadata" not in data or "data" not in data:
+                    messagebox.showerror("Erreur", f"Le fichier {os.path.basename(path)} n'est pas un export valide.")
+                    continue
+                
+                self.creer_carte_comparaison(data, os.path.basename(path))
+            except Exception as e:
+                messagebox.showerror("Erreur", f"Impossible de lire {os.path.basename(path)} : {e}")
+
+    def creer_carte_comparaison(self, data, filename):
+        meta = data.get("metadata", {})
+        tols = data.get("tolerances", {})
+        lignes = data.get("data", [])
+
+        derives = []
+        tols_operet = tols.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+
+        for row in lignes:
+            filt_name = str(row.get("Filter", "")).upper()
+            if "BESSEL" in filt_name: filt_key = "BESSEL"
+            elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
+            else: filt_key = "WIDEBAND"
+            
+            inp = row.get("Input", "?")
+            
+            if filt_key in ["BESSEL", "BUTTERWORTH"]:
+                t_tols = tols_operet[filt_key]["TENSION"]
+                g_ten = float(str(row.get("DCGain", 0)).replace(',', '.').replace('⚠️ ', ''))
+                e_ten = float(str(row.get("MSE", 0)).replace(',', '.').replace('⚠️ ', ''))
+                im_ten = 2 * math.sqrt(g_ten**2 + e_ten**2)
+                
+                p_gt = (abs(g_ten) / t_tols["Gain"]) * 100 if t_tols["Gain"] else 0
+                p_et = (abs(e_ten) / t_tols["MSE"]) * 100 if t_tols["MSE"] else 0
+                p_imt = (im_ten / t_tols["Ig"]) * 100 if t_tols["Ig"] else 0
+                
+                if p_gt > 1.0: derives.append((p_gt, inp, "Tension", "Gain", f"{g_ten:.4f}", f"{p_gt:.1f}%"))
+                if p_et > 1.0: derives.append((p_et, inp, "Tension", "MSE", f"{e_ten:.4f}", f"{p_et:.1f}%"))
+                if p_imt > 1.0: derives.append((p_imt, inp, "Tension", "I/M", f"{im_ten:.4f}", f"{p_imt:.1f}%"))
+
+            if filt_key == "WIDEBAND":
+                i_tols = tols_operet[filt_key]["IEPE"]
+                g_iepe = float(str(row.get("IEPE Gain", 0)).replace(',', '.').replace('⚠️ ', ''))
+                e_iepe = float(str(row.get("IEPE_MSE", row.get("MSE", 0))).replace(',', '.').replace('⚠️ ', ''))
+                im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe**2)
+                
+                p_gi = (abs(g_iepe) / i_tols["Gain"]) * 100 if i_tols["Gain"] else 0
+                p_ei = (abs(e_iepe) / i_tols["MSE"]) * 100 if i_tols["MSE"] else 0
+                p_imi = (im_iepe / i_tols["Ig"]) * 100 if i_tols["Ig"] else 0
+
+                if p_gi > 1.0: derives.append((p_gi, inp, "IEPE", "Gain", f"{g_iepe:.4f}", f"{p_gi:.1f}%"))
+                if p_ei > 1.0: derives.append((p_ei, inp, "IEPE", "MSE", f"{e_iepe:.4f}", f"{p_ei:.1f}%"))
+                if p_imi > 1.0: derives.append((p_imi, inp, "IEPE", "I/M", f"{im_iepe:.4f}", f"{p_imi:.1f}%"))
+
+        derives.sort(key=lambda x: x[0], reverse=True)
+
+        card = ctk.CTkFrame(self.comp_scroll, width=420, fg_color="white", border_width=2, border_color="#0033A0")
+        card.pack(side="left", fill="y", padx=10, pady=5)
+        card.pack_propagate(False)
+
+        head = ctk.CTkFrame(card, fg_color="#E6F0FA", corner_radius=0)
+        head.pack(fill="x")
+        ctk.CTkLabel(head, text=f"{meta.get('materiel', 'Matériel Inconnu')} ({meta.get('annee', '?')})", font=("Arial", 15, "bold"), text_color="#0033A0").pack(pady=(10, 2))
+        ctk.CTkLabel(head, text=f"Mesures du : {meta.get('date_mesure', '?')}", font=("Arial", 12)).pack(pady=2)
+        ctk.CTkLabel(head, text=f"Auteur : {meta.get('nom', 'Anonyme')} | Export : {meta.get('date_export', '?')}", font=("Arial", 10), text_color="gray").pack(pady=(0, 10))
+
+        com = meta.get('commentaire', '')
+        if com: ctk.CTkLabel(card, text=f"Note: {com}", font=("Arial", 11, "italic"), wraplength=380, justify="left").pack(pady=5, padx=10, anchor="w")
+
+        def show_tols():
+            top_tol = ctk.CTkToplevel(self)
+            top_tol.title("Tolérances Appliquées")
+            top_tol.geometry("500x300")
+            top_tol.attributes("-topmost", True)
+            
+            ctk.CTkLabel(top_tol, text="Limites exactes lors de cet export (+/- %)", font=("Arial", 14, "bold"), text_color="#0033A0").pack(pady=10)
+            
+            tv_t = ttk.Treeview(top_tol, columns=["Filtre", "Mode", "Gain", "MSE", "Ig"], show="headings", height=4)
+            tv_t.heading("Filtre", text="Filtre"); tv_t.column("Filtre", width=120, anchor="center")
+            tv_t.heading("Mode", text="Voie"); tv_t.column("Mode", width=80, anchor="center")
+            tv_t.heading("Gain", text="Gain"); tv_t.column("Gain", width=80, anchor="center")
+            tv_t.heading("MSE", text="MSE"); tv_t.column("MSE", width=80, anchor="center")
+            tv_t.heading("Ig", text="Ig (I/M)"); tv_t.column("Ig", width=80, anchor="center")
+            
+            for f_k in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
+                for m_k in ["TENSION", "IEPE"]:
+                    t = tols_operet[f_k][m_k]
+                    tv_t.insert("", "end", values=(f_k, m_k, t["Gain"], t["MSE"], t["Ig"]))
+                    
+            tv_t.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ctk.CTkButton(card, text="Voir Tolérances Utilisées", font=("Arial", 11, "bold"), fg_color="#0055A4", text_color="white", hover_color="#002277", height=28, command=show_tols).pack(pady=5)
+
+        ctk.CTkLabel(card, text=f"Éléments en Dérive ({len(derives)})", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=(10, 5))
+
+        if not derives:
+            ctk.CTkLabel(card, text="Aucun défaut. Centrage parfait.", text_color="#196F3D", font=("Arial", 12, "bold")).pack(pady=20)
+        else:
+            tv_fr = ctk.CTkFrame(card)
+            tv_fr.pack(fill="both", expand=True, padx=5, pady=5)
+            
+            tv = ttk.Treeview(tv_fr, columns=["Inp", "Voie", "Param", "Val", "Tol"], show="headings", height=15)
+            tv.heading("Inp", text="Inp"); tv.column("Inp", width=35, anchor="center")
+            tv.heading("Voie", text="Voie"); tv.column("Voie", width=65, anchor="center")
+            tv.heading("Param", text="Param"); tv.column("Param", width=85, anchor="center")
+            tv.heading("Val", text="Valeur"); tv.column("Val", width=65, anchor="center")
+            tv.heading("Tol", text="% Tol"); tv.column("Tol", width=60, anchor="center")
+            
+            tv.tag_configure("orange", background="#FDEBD0", foreground="#D68910")
+            tv.tag_configure("red", background="#FADBD8", foreground="#C0392B")
+            
+            vsb = ttk.Scrollbar(tv_fr, orient="vertical", command=tv.yview)
+            tv.configure(yscrollcommand=vsb.set)
+            tv.pack(side="left", fill="both", expand=True)
+            vsb.pack(side="right", fill="y")
+            
+            for d in derives:
+                pct_val = d[0]
+                tag = "red" if pct_val > 45.0 else "orange"
+                tv.insert("", "end", values=(d[1], d[2], d[3], d[4], d[5]), tags=(tag,))
+
+    def ouvrir_comparateur_delta(self):
+        filepaths = filedialog.askopenfilenames(title="Sélectionnez EXACTEMENT 2 fichiers d'export JSON", filetypes=[("Fichier QualiData JSON", "*.json")])
+        if len(filepaths) != 2:
+            messagebox.showwarning("Attention", "Veuillez sélectionner exactement 2 fichiers JSON pour calculer la différence.")
+            return
+        
+        try:
+            with open(filepaths[0], 'r', encoding='utf-8') as f1, open(filepaths[1], 'r', encoding='utf-8') as f2:
+                d1 = json.load(f1)
+                d2 = json.load(f2)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de lire les fichiers : {e}")
+            return
+        
+        def build_dict(data_list):
+            res = {}
+            for r in data_list:
+                res[(str(r.get("Filter", "")).upper(), str(r.get("Input", "")))] = r
+            return res
+            
+        map1 = build_dict(d1.get("data", []))
+        map2 = build_dict(d2.get("data", []))
+        all_keys = set(map1.keys()).union(set(map2.keys()))
+        
+        top_delta = ctk.CTkToplevel(self)
+        top_delta.title("Comparaison des Dérives (Ajustement)")
+        top_delta.geometry("1100x600")
+        top_delta.attributes("-topmost", True)
+        
+        name1 = f"{d1.get('metadata', {}).get('annee', 'Fichier 1')} - {d1.get('metadata', {}).get('date_mesure', '')}"
+        name2 = f"{d2.get('metadata', {}).get('annee', 'Fichier 2')} - {d2.get('metadata', {}).get('date_mesure', '')}"
+        
+        ctk.CTkLabel(top_delta, text=f"Comparatif Direct : {name1} VS {name2}", font=("Arial", 16, "bold"), text_color="#0033A0").pack(pady=10)
+        ctk.CTkLabel(top_delta, text="Lecture : Une évolution Verte signifie que l'erreur se rapproche de 0 (Amélioration). Rouge signifie que l'erreur s'éloigne (Dégradation).").pack()
+        
+        tv_fr = ctk.CTkFrame(top_delta)
+        tv_fr.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        tv = ttk.Treeview(tv_fr, columns=["Filtre", "Inp", "Param", "Val1", "Val2", "Delta"], show="headings", height=20)
+        tv.heading("Filtre", text="Filtre"); tv.column("Filtre", width=180, anchor="center")
+        tv.heading("Inp", text="Input"); tv.column("Inp", width=50, anchor="center")
+        tv.heading("Param", text="Paramètre"); tv.column("Param", width=150, anchor="center")
+        tv.heading("Val1", text=f"[{name1}]"); tv.column("Val1", width=120, anchor="center")
+        tv.heading("Val2", text=f"[{name2}]"); tv.column("Val2", width=120, anchor="center")
+        tv.heading("Delta", text="Évolution (V2 - V1)"); tv.column("Delta", width=150, anchor="center")
+        
+        tv.tag_configure("green", foreground="#196F3D", font=("Arial", 10, "bold"))
+        tv.tag_configure("red", foreground="#C0392B", font=("Arial", 10, "bold"))
+        tv.tag_configure("neutral", foreground="black")
+        
+        vsb = ttk.Scrollbar(tv_fr, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=vsb.set)
+        tv.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        
+        for key in sorted(all_keys):
+            r1 = map1.get(key, {})
+            r2 = map2.get(key, {})
+            
+            params_to_check = [
+                ("Tension Gain", "DCGain"), 
+                ("Tension MSE", "MSE"), 
+                ("IEPE Gain", "IEPE Gain"),
+                ("IEPE MSE", "MSE") 
+            ]
+            
+            for p_label, p_key in params_to_check:
+                if "IEPE" in p_label and "WIDEBAND" not in key[0]:
+                    continue
+                if "Tension" in p_label and "WIDEBAND" in key[0]:
+                    continue
+                    
+                v1_str = r1.get(p_key, "N/A")
+                v2_str = r2.get(p_key, "N/A")
+                
+                try: val1 = float(str(v1_str).replace(',', '.').replace('⚠️ ', ''))
+                except: val1 = None
+                try: val2 = float(str(v2_str).replace(',', '.').replace('⚠️ ', ''))
+                except: val2 = None
+                
+                if val1 is not None and val2 is not None:
+                    delta = val2 - val1
+                    delta_str = f"{delta:+.4f}%"
+                    
+                    if abs(val2) < abs(val1): tag = "green"  
+                    elif abs(val2) > abs(val1): tag = "red"  
+                    else: tag = "neutral"
+                    
+                    tv.insert("", "end", values=(key[0], key[1], p_label, f"{val1:.4f}%", f"{val2:.4f}%", delta_str), tags=(tag,))
+                elif val1 is not None or val2 is not None:
+                    tv.insert("", "end", values=(key[0], key[1], p_label, v1_str, v2_str, "Incomplet"), tags=("neutral",))
+
+    # --------------------------------------------------------------------------
+    # UI RAPPORT MANQUANTS
+    # --------------------------------------------------------------------------
+    def setup_missing_ui(self):
+        top_m = ctk.CTkFrame(self.tab_manquants, height=50, fg_color="transparent")
+        top_m.pack(fill="x", padx=10, pady=10)
+        ctk.CTkLabel(top_m, text="Contrôle d'Intégrité des Inputs (1 à X)", font=("Arial", 16, "bold"), text_color="#C0392B").pack(side="left")
+        ctk.CTkButton(top_m, text="🔄 ACTUALISER", fg_color="#C0392B", hover_color="#922B21", 
+                      command=self.verifier_integrite_inputs).pack(side="right")
+
+        frame_list = ctk.CTkFrame(self.tab_manquants, fg_color="white")
+        frame_list.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.tree_missing = ttk.Treeview(frame_list, columns=["Fichier", "Filtre", "Message"], show="headings")
+        self.tree_missing.heading("Fichier", text="Fichier PDF"); self.tree_missing.column("Fichier", width=250)
+        self.tree_missing.heading("Filtre", text="Filtre Concerné"); self.tree_missing.column("Filtre", width=250)
+        self.tree_missing.heading("Message", text="Résultat du contrôle"); self.tree_missing.column("Message", width=400)
+
+        vsb_m = ttk.Scrollbar(frame_list, orient="vertical", command=self.tree_missing.yview)
+        self.tree_missing.configure(yscrollcommand=vsb_m.set)
+        self.tree_missing.pack(side="left", fill="both", expand=True)
+        vsb_m.pack(side="right", fill="y")
+        self.tree_missing.tag_configure("miss", background="#FADBD8", foreground="#C0392B")
+        self.tree_missing.tag_configure("good", background="#D5F5E3", foreground="#196F3D")
+
+    # --------------------------------------------------------------------------
+    # UI INCERTITUDES / OPERET
+    # --------------------------------------------------------------------------
+    def setup_incertitude_ui(self):
+        top_i = ctk.CTkFrame(self.tab_incertitude, height=50, fg_color="#EAFAF1")
+        top_i.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(top_i, text="Calcul Automatique (Seuils définis dans Paramètres)", font=("Arial", 12, "italic")).pack(side="left", padx=20)
+        ctk.CTkButton(top_i, text="Calculer / Actualiser", width=150, command=self.calculer_et_afficher_incertitudes).pack(side="left", padx=20)
+
+        leg_fr = ctk.CTkFrame(top_i, fg_color="transparent")
+        leg_fr.pack(side="right", padx=10)
+        ctk.CTkLabel(leg_fr, text="⬤ OK", text_color="#196F3D", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+        ctk.CTkLabel(leg_fr, text="⬤ HORS TOLÉRANCE", text_color="#C0392B", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+
+        # TABLEAU TENSION
+        f_ten = ctk.CTkFrame(self.tab_incertitude, fg_color="transparent")
+        f_ten.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        ctk.CTkLabel(f_ten, text="Analyse TENSION (Direct)", font=("Arial", 12, "bold"), text_color="#2980B9").pack(anchor="w")
+        cols_ten = ["Fichier", "Filtre", "Input", "Tension_Gain", "Tension_Ecart", "IM_Tension", "Status"]
+        self.tree_ten = ttk.Treeview(f_ten, columns=cols_ten, show="headings", height=8)
+        self.tree_ten.heading("Fichier", text="Fichier"); self.tree_ten.column("Fichier", width=150)
+        self.tree_ten.heading("Filtre", text="Filtre"); self.tree_ten.column("Filtre", width=150)
+        self.tree_ten.heading("Input", text="Input"); self.tree_ten.column("Input", width=50, anchor="center")
+        self.tree_ten.heading("Tension_Gain", text="Gain Num (%)"); self.tree_ten.column("Tension_Gain", width=100, anchor="center")
+        self.tree_ten.heading("Tension_Ecart", text="MSE (%)"); self.tree_ten.column("Tension_Ecart", width=100, anchor="center")
+        self.tree_ten.heading("IM_Tension", text="I/M (Calc)"); self.tree_ten.column("IM_Tension", width=100, anchor="center")
+        self.tree_ten.heading("Status", text="Décision"); self.tree_ten.column("Status", width=180, anchor="center")
+        vsb_t = ttk.Scrollbar(f_ten, orient="vertical", command=self.tree_ten.yview)
+        self.tree_ten.configure(yscrollcommand=vsb_t.set)
+        self.tree_ten.pack(side="left", fill="both", expand=True); vsb_t.pack(side="right", fill="y")
+
+        # TABLEAU IEPE
+        f_iepe = ctk.CTkFrame(self.tab_incertitude, fg_color="transparent")
+        f_iepe.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        ctk.CTkLabel(f_iepe, text="Analyse IEPE (Capteur)", font=("Arial", 12, "bold"), text_color="#8E44AD").pack(anchor="w")
+        cols_iepe = ["Fichier", "Filtre", "Input", "IEPE_Gain", "IEPE_Ecart", "IM_IEPE", "Status"]
+        self.tree_iepe = ttk.Treeview(f_iepe, columns=cols_iepe, show="headings", height=8)
+        self.tree_iepe.heading("Fichier", text="Fichier"); self.tree_iepe.column("Fichier", width=150)
+        self.tree_iepe.heading("Filtre", text="Filtre"); self.tree_iepe.column("Filtre", width=150)
+        self.tree_iepe.heading("Input", text="Input"); self.tree_iepe.column("Input", width=50, anchor="center")
+        self.tree_iepe.heading("IEPE_Gain", text="IEPE Gain (%)"); self.tree_iepe.column("IEPE_Gain", width=100, anchor="center")
+        self.tree_iepe.heading("IEPE_Ecart", text="MSE (%)"); self.tree_iepe.column("IEPE_Ecart", width=100, anchor="center")
+        self.tree_iepe.heading("IM_IEPE", text="I/M (Calc)"); self.tree_iepe.column("IM_IEPE", width=100, anchor="center")
+        self.tree_iepe.heading("Status", text="Décision"); self.tree_iepe.column("Status", width=180, anchor="center")
+        vsb_i = ttk.Scrollbar(f_iepe, orient="vertical", command=self.tree_iepe.yview)
+        self.tree_iepe.configure(yscrollcommand=vsb_i.set)
+        self.tree_iepe.pack(side="left", fill="both", expand=True); vsb_i.pack(side="right", fill="y")
+
+        for tree in [self.tree_ten, self.tree_iepe]:
+            tree.tag_configure("green", background="#D5F5E3")
+            tree.tag_configure("red", background="#FADBD8")
+
+    # --------------------------------------------------------------------------
+    # UI DISTRIBUTION GAUSSIENNE
+    # --------------------------------------------------------------------------
+    def setup_gauss_ui(self):
+        top_g = ctk.CTkFrame(self.tab_gauss, height=60, fg_color="transparent")
+        top_g.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(top_g, text="Répartition Statistique des Mesures (% de la Tolérance)", font=("Arial", 16, "bold"), text_color="#1565C0").pack(side="left")
+        ctk.CTkButton(top_g, text="🔄 CALCULER RÉPARTITION", fg_color="#1565C0", command=self.calculer_et_afficher_gauss).pack(side="right", padx=10)
+
+        desc = "L'histogramme est vertical. Les couleurs indiquent la conformité :\n🟩 Idéal (Centré)   |   🟧 Dérive acceptable   |   🟥 Hors Tolérance / Critique\n👉 Survolez une case avec la souris pour voir la liste des capteurs correspondants."
+        ctk.CTkLabel(self.tab_gauss, text=desc, justify="left", font=("Arial", 12, "bold")).pack(anchor="w", padx=15, pady=(0,10))
+
+        frame_g = ctk.CTkFrame(self.tab_gauss, fg_color="white")
+        frame_g.pack(fill="both", expand=True, padx=10, pady=10)
+
+        cols_g = ["Intervalle", "Tension Gain", "Tension MSE", "Tension I/M", "IEPE Gain", "IEPE MSE", "IEPE I/M"]
+        
+        self.tree_gauss = ttk.Treeview(frame_g, columns=cols_g, show="headings", height=18)
+        hsb_g = ttk.Scrollbar(frame_g, orient="horizontal", command=self.tree_gauss.xview)
+        self.tree_gauss.configure(xscrollcommand=hsb_g.set)
+        
+        for i, c in enumerate(cols_g):
+            self.tree_gauss.heading(c, text=c)
+            w = 180 if i == 0 else 120
+            anc = "w" if i == 0 else "center"
+            self.tree_gauss.column(c, width=w, anchor=anc)
+
+        self.tree_gauss.tag_configure("green", background="#D5F5E3", font=("Arial", 11))
+        self.tree_gauss.tag_configure("orange", background="#FDEBD0", font=("Arial", 11))
+        self.tree_gauss.tag_configure("red", background="#FADBD8", font=("Arial", 11))
+
+        vsb_g = ttk.Scrollbar(frame_g, orient="vertical", command=self.tree_gauss.yview)
+        self.tree_gauss.configure(yscrollcommand=vsb_g.set)
+        
+        hsb_g.pack(side="bottom", fill="x")
+        self.tree_gauss.pack(side="left", fill="both", expand=True)
+        vsb_g.pack(side="right", fill="y")
+        
+        self.tree_gauss.bind("<Motion>", self.on_gauss_hover)
+        self.tree_gauss.bind("<Leave>", self.hide_tooltip)
+
+    def on_gauss_hover(self, event):
+        item = self.tree_gauss.identify_row(event.y)
+        col = self.tree_gauss.identify_column(event.x)
+        
+        if not item or not col or col == "#1":
+            self.hide_tooltip()
+            return
+            
+        col_idx = int(col.replace("#", "")) - 2 
+        params_order = ["Tension Gain", "Tension MSE", "Tension I/M", "IEPE Gain", "IEPE MSE", "IEPE I/M"]
+        
+        if col_idx < 0 or col_idx >= len(params_order):
+            self.hide_tooltip()
+            return
+            
+        param_name = params_order[col_idx]
+        try: row_idx = self.tree_gauss.index(item)
+        except: self.hide_tooltip(); return
+
+        details = self.gauss_details.get(param_name, {}).get(row_idx, [])
+        if not details: self.hide_tooltip(); return
+            
+        text = f"Détails ({param_name}) :\n" + "-"*30 + "\n"
+        if len(details) > 20: text += "\n".join(details[:20]) + f"\n... et {len(details)-20} autres"
+        else: text += "\n".join(details)
+            
+        if row_idx in [0, 1, 15, 16]: bg_c, fg_c = "#FADBD8", "#C0392B"
+        elif row_idx == 8:            bg_c, fg_c = "#D5F5E3", "#196F3D"
+        else:                         bg_c, fg_c = "#FDEBD0", "#D68910"
+            
+        self.show_tooltip(event.x_root, event.y_root, text, bg_c, fg_c)
+
+    def show_tooltip(self, x, y, text, bg_color, fg_color):
+        if self.tooltip_win and self.tooltip_win.winfo_exists():
+            self.tooltip_label.config(text=text, bg=bg_color, fg=fg_color)
+            self.tooltip_win.geometry(f"+{x+15}+{y+15}")
+            return
+        self.tooltip_win = tk.Toplevel(self)
+        self.tooltip_win.wm_overrideredirect(True)
+        self.tooltip_win.attributes('-topmost', True)
+        self.tooltip_win.geometry(f"+{x+15}+{y+15}")
+        self.tooltip_label = tk.Label(self.tooltip_win, text=text, justify="left", background=bg_color, foreground=fg_color, relief="solid", borderwidth=1, font=("Arial", 10, "bold"))
+        self.tooltip_label.pack(ipadx=8, ipady=8)
+
+    def hide_tooltip(self, event=None):
+        if self.tooltip_win and self.tooltip_win.winfo_exists():
+            self.tooltip_win.destroy()
+            self.tooltip_win = None
+
+    def calculer_et_afficher_gauss(self):
+        self.tree_gauss.delete(*self.tree_gauss.get_children())
+        TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+        params = ["Tension Gain", "Tension MSE", "Tension I/M", "IEPE Gain", "IEPE MSE", "IEPE I/M"]
+        bins = {p: [0]*17 for p in params}
+        self.gauss_details = {p: {i: [] for i in range(17)} for p in params}
+        
+        def get_bin_index(pct):
+            if pct < -100: return 0
+            elif pct < -45: return 1
+            elif pct < -25: return 2
+            elif pct < -20: return 3
+            elif pct < -15: return 4
+            elif pct < -10: return 5
+            elif pct < -5: return 6
+            elif pct < -1: return 7
+            elif pct <= 1: return 8
+            elif pct <= 5: return 9
+            elif pct <= 10: return 10
+            elif pct <= 15: return 11
+            elif pct <= 20: return 12
+            elif pct <= 25: return 13
+            elif pct <= 45: return 14
+            elif pct <= 100: return 15
+            else: return 16
+
+        for row in self.db_lignes:
+            if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
+            
+            filt_name = str(row["Filter"]).upper()
+            if "BESSEL" in filt_name: filt_key = "BESSEL"
+            elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
+            else: filt_key = "WIDEBAND"
+            
+            f_name = row['Fichier']
+            if len(f_name) > 18: f_name = f_name[:15] + "..."
+            short_filt = "BESSEL" if "BESSEL" in filt_key else "BUTTER" if "BUTTER" in filt_key else "WIDE"
+            inp = row.get('Input', '?')
+
+            if filt_key in ["BESSEL", "BUTTERWORTH"]:
+                tols_t = TOLS[filt_key]["TENSION"]
+                g_t = self.parse_float(row.get("DCGain"))
+                e_t = self.parse_float(row.get("MSE"))
+                im_t = 2 * math.sqrt(g_t**2 + e_t**2)
+                
+                p_gt = (g_t / tols_t["Gain"]) * 100 if tols_t["Gain"] else 0
+                p_et = (e_t / tols_t["MSE"]) * 100 if tols_t["MSE"] else 0
+                p_imt = (im_t / tols_t["Ig"]) * 100 if tols_t["Ig"] else 0
+                
+                idx = get_bin_index(p_gt); bins["Tension Gain"][idx] += 1; self.gauss_details["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
+                idx = get_bin_index(p_et); bins["Tension MSE"][idx] += 1; self.gauss_details["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
+                idx = get_bin_index(p_imt); bins["Tension I/M"][idx] += 1; self.gauss_details["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
+            
+            if filt_key == "WIDEBAND":
+                tols_i = TOLS[filt_key]["IEPE"]
+                g_i = self.parse_float(row.get("IEPE Gain"))
+                e_i = self.parse_float(row.get("MSE")) 
+                im_i = 2 * math.sqrt(g_i**2 + e_i**2)
+                
+                p_gi = (g_i / tols_i["Gain"]) * 100 if tols_i["Gain"] else 0
+                p_ei = (e_i / tols_i["MSE"]) * 100 if tols_i["MSE"] else 0
+                p_imi = (im_i / tols_i["Ig"]) * 100 if tols_i["Ig"] else 0
+                
+                idx = get_bin_index(p_gi); bins["IEPE Gain"][idx] += 1; self.gauss_details["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
+                idx = get_bin_index(p_ei); bins["IEPE MSE"][idx] += 1; self.gauss_details["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
+                idx = get_bin_index(p_imi); bins["IEPE I/M"][idx] += 1; self.gauss_details["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
+
+        interval_labels = [
+            "🟥 <-100%", "🟥 [-100 à -45[", "🟧 [-45 à -25[", "🟧 [-25 à -20[", 
+            "🟧 [-20 à -15[", "🟧 [-15 à -10[", "🟧 [-10 à -5[", "🟧 [-5 à -1[", 
+            "🟩 [-1 à 1]", 
+            "🟧 ]1 à 5]", "🟧 ]5 à 10]", "🟧 ]10 à 15]", "🟧 ]15 à 20]", "🟧 ]20 à 25]", 
+            "🟧 ]25 à 45]", "🟥 ]45 à 100]", "🟥 >100%"
+        ]
+        interval_tags = [
+            "red", "red", "orange", "orange", "orange", "orange", "orange", "orange",
+            "green",
+            "orange", "orange", "orange", "orange", "orange", "orange", "red", "red"
+        ]
+
+        for i in range(17):
+            row_vals = [interval_labels[i]]
+            for p in params:
+                val = bins[p][i]
+                row_vals.append(str(val) if val > 0 else "-")
+            self.tree_gauss.insert("", "end", values=row_vals, tags=(interval_tags[i],))
+
+    # --------------------------------------------------------------------------
+    # LOGIQUE INCERTITUDES
+    # --------------------------------------------------------------------------
+    def calculer_et_afficher_incertitudes(self):
+        self.tree_ten.delete(*self.tree_ten.get_children())
+        self.tree_iepe.delete(*self.tree_iepe.get_children())
+        
+        TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+
+        for row in self.db_lignes:
+            if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
+
+            filt_name = str(row["Filter"]).upper()
+            if "BESSEL" in filt_name: filt_key = "BESSEL"
+            elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
+            else: filt_key = "WIDEBAND"
+            
+            if filt_key in ["BESSEL", "BUTTERWORTH"]:
+                tols_ten = TOLS[filt_key]["TENSION"]
+                g_ten = self.parse_float(row.get("DCGain"))
+                e_ten = self.parse_float(row.get("MSE"))
+                im_ten = 2 * math.sqrt(g_ten**2 + e_ten**2)
+                
+                fails_ten = []
+                if abs(g_ten) > tols_ten["Gain"]: fails_ten.append("Gain")
+                if abs(e_ten) > tols_ten["MSE"]: fails_ten.append("MSE")
+                if im_ten > tols_ten["Ig"]: fails_ten.append("I/M")
+                
+                tag_t = "red" if fails_ten else "green"
+                dec_t = f"NOK: {', '.join(fails_ten)}" if fails_ten else "OK"
+                self.tree_ten.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_ten:.4f}", f"{e_ten:.4f}", f"{im_ten:.4f}", dec_t), tags=(tag_t,))
+
+            if filt_key == "WIDEBAND":
+                tols_iepe = TOLS[filt_key]["IEPE"]
+                g_iepe = self.parse_float(row.get("IEPE Gain"))
+                e_iepe_mse = self.parse_float(row.get("MSE")) 
+                im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe_mse**2)
+                
+                fails_iepe = []
+                if abs(g_iepe) > tols_iepe["Gain"]: fails_iepe.append("Gain")
+                if abs(e_iepe_mse) > tols_iepe["MSE"]: fails_iepe.append("MSE")
+                if im_iepe > tols_iepe["Ig"]: fails_iepe.append("I/M")
+                
+                tag_i = "red" if fails_iepe else "green"
+                dec_i = f"NOK: {', '.join(fails_iepe)}" if fails_iepe else "OK"
+                self.tree_iepe.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_iepe:.4f}", f"{e_iepe_mse:.4f}", f"{im_iepe:.4f}", dec_i), tags=(tag_i,))
+
+    # --------------------------------------------------------------------------
+    # LOGIQUES COMMUNES
+    # --------------------------------------------------------------------------
+    def parse_float(self, val):
+        try: return float(str(val).replace(',', '.').replace('⚠️ ', ''))
+        except: return 0.0
+
+    def calculer_champs(self, row):
+        try:
+            v_cmrr = self.parse_float(row.get("CMRR"))
+            err_cmrr = (10 ** (-abs(v_cmrr)/20)) * 100 if row.get("CMRR") and "NA" not in str(row.get("CMRR")) else 0.0
+            rss = math.sqrt(self.parse_float(row.get("Offset"))**2 + self.parse_float(row.get("DCGain"))**2 + self.parse_float(row.get("MSE"))**2 + err_cmrr**2)
+            row["Derive_Std"] = f"{rss:.3f}"
+        except: row["Derive_Std"] = "0.000"
+        try:
+            v_comp = self.parse_float(row.get("IEPE Comp"))
+            delta = abs(v_comp - 24.0) if v_comp > 1 else 0.0
+            rss_iepe = math.sqrt(delta**2 + self.parse_float(row.get("IEPE Gain"))**2)
+            row["Derive_IEPE"] = f"{rss_iepe:.3f}"
+        except: row["Derive_IEPE"] = "0.000"
+        is_error = False
+        for k, v in row.items():
+            if k in self.regles_actives and k not in ["Nb_Inputs_Max", "OPERET"]:
+                val = self.parse_float(v)
+                mini, maxi = self.regles_actives[k]
+                clean = str(v).replace("⚠️ ", "")
+                row[k] = clean
+                if not (mini <= val <= maxi): is_error = True; row[k] = f"⚠️ {clean}"
+        row["Etat"] = "Alerte" if is_error else "OK"
+        return row, "error" if is_error else "ok"
+
+    def recalculer_tout_db(self):
+        for i, r in enumerate(self.db_lignes):
+            new_r, tag = self.calculer_champs(r); new_r["tag"] = tag; self.db_lignes[i] = new_r
+        self.appliquer_filtres_visuels(None); self.verifier_integrite_inputs(); self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss()
+
+    def reset_filters(self):
+        self.var_filter_type.set("Tous les filtres")
+        self.fichiers_visibles_set = set([r["Fichier"] for r in self.db_lignes] + ["MANUEL"] + [os.path.basename(f) for f in self.fichiers_selectionnes])
+        self.appliquer_filtres_visuels(None)
+
+    def ouvrir_selecteur_fichiers(self):
+        tous_fichiers = sorted(list(set([r["Fichier"] for r in self.db_lignes] + ["MANUEL"] + [os.path.basename(f) for f in self.fichiers_selectionnes])))
+        if not tous_fichiers: messagebox.showinfo("Info", "Aucun fichier."); return
+        top = ctk.CTkToplevel(self); top.title("Filtrer"); top.geometry("400x600"); top.attributes("-topmost", True)
+        scroll = ctk.CTkScrollableFrame(top); scroll.pack(fill="both", expand=True, padx=10)
+        self.check_vars = {}
+        for f in tous_fichiers:
+            var = ctk.BooleanVar(value=(f in self.fichiers_visibles_set))
+            ctk.CTkCheckBox(scroll, text=f, variable=var).pack(anchor="w", pady=2)
+            self.check_vars[f] = var
+        def valider():
+            self.fichiers_visibles_set = set([n for n, v in self.check_vars.items() if v.get()])
+            self.appliquer_filtres_visuels(None); self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss()
+            top.destroy()
+        ctk.CTkButton(top, text="VALIDER", command=valider).pack(pady=10)
+
+    def appliquer_filtres_visuels(self, event):
+        self.tree.delete(*self.tree.get_children())
+        f_type = self.var_filter_type.get()
+        for row in self.db_lignes:
+            if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
+            if f_type != "Tous les filtres" and row["Filter"] != f_type: continue
+            vals = [row["uuid"]] + [row.get(c, "") for c in ["Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER]
+            self.tree.insert("", "end", values=vals, tags=(row["tag"],))
+        if event:
+            self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss()
+
+    def verifier_integrite_inputs(self):
+        self.tree_missing.delete(*self.tree_missing.get_children())
+        target_max = int(self.regles_actives.get("Nb_Inputs_Max", [8.0])[0])
+        data = {}
+        for row in self.db_lignes:
+            f, filt = row["Fichier"], row["Filter"]
+            try: inp = int(re.search(r'(\d+)', str(row["Input"])).group(1))
+            except: continue
+            if f not in data: data[f] = {}
+            if filt not in data[f]: data[f][filt] = []
+            data[f][filt].append(inp)
+        
+        if not data: self.tree_missing.insert("", "end", values=("AUCUNE DONNÉE", "-", "-"), tags=("miss",)); return
+        for f, filtres in data.items():
+            for filt, inputs in filtres.items():
+                missing = sorted(list(set(range(1, target_max + 1)) - set(inputs)))
+                if missing: self.tree_missing.insert("", "end", values=(f, filt, f"MANQUE: {missing}"), tags=("miss",))
+                else: self.tree_missing.insert("", "end", values=(f, filt, f"COMPLET (1-{target_max})"), tags=("good",))
+
+    def supprimer_selection(self):
+        sel = self.tree.selection()
+        if not sel: return
+        if not messagebox.askyesno("Confirmer", "Supprimer ?"): return
+        uuid_target = self.tree.item(sel[0], 'values')[0]
+        self.db_lignes = [r for r in self.db_lignes if r["uuid"] != uuid_target]
+        self.appliquer_filtres_visuels(None); self.verifier_integrite_inputs(); self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss(); self.update_combos_fichiers()
+
+    def editer_selection(self):
+        sel = self.tree.selection(); 
+        if not sel: return
+        uuid_target = self.tree.item(sel[0], 'values')[0]
+        row = next((r for r in self.db_lignes if r["uuid"] == uuid_target), None)
+        if row: self.ouvrir_popup_edition(row)
+
+    def ouvrir_popup_edition(self, row=None):
+        self.top_manual = ctk.CTkToplevel(self); self.top_manual.title("Édition"); self.top_manual.geometry("600x700"); self.top_manual.attributes("-topmost", True)
+        main = ctk.CTkScrollableFrame(self.top_manual); main.pack(fill="both", expand=True, padx=20, pady=20)
+        self.widgets_manual = {}
+        files = list(set([r["Fichier"] for r in self.db_lignes] + ["MANUEL"] + [os.path.basename(f) for f in self.fichiers_selectionnes]))
+        self._add_combo(main, "Fichier", sorted(files), row.get("Fichier", "MANUEL") if row else "MANUEL")
+        self._add_combo(main, "Filter", LISTE_FILTRES, row.get("Filter", LISTE_FILTRES[0]) if row else LISTE_FILTRES[0])
+        fr = ctk.CTkFrame(main); fr.pack(fill="x", pady=5); ctk.CTkLabel(fr, text="Input:", width=80).pack(side="left")
+        e = ctk.CTkEntry(fr); e.pack(side="left", fill="x", expand=True); e.insert(0, str(row.get("Input", ""))) if row else None; self.widgets_manual["Input"]=e
+        fr_span = ctk.CTkFrame(main); fr_span.pack(fill="x", pady=5); ctk.CTkLabel(fr_span, text="Span:", width=80).pack(side="left")
+        e_span = ctk.CTkEntry(fr_span); e_span.pack(side="left", fill="x", expand=True); e_span.insert(0, str(row.get("Span", "10.0")) if row else "10.0"); self.widgets_manual["Span"]=e_span
+        for col in [c for c in COLONNES_A_AFFICHER if "Derive" not in c]:
+            fr = ctk.CTkFrame(main); fr.pack(fill="x", pady=2); ctk.CTkLabel(fr, text=col, width=120).pack(side="left")
+            e = ctk.CTkEntry(fr); e.pack(side="right", fill="x", expand=True)
+            e.insert(0, str(row.get(col, "0.0")).replace("⚠️ ", "") if row else "0.0"); self.widgets_manual[col]=e
+        cmd = lambda: self.valider_edition(row["uuid"] if row else None)
+        ctk.CTkButton(main, text="VALIDER", command=cmd, fg_color="green").pack(pady=20, fill="x")
+
+    def _add_combo(self, p, l, v, d):
+        fr = ctk.CTkFrame(p); fr.pack(fill="x", pady=5); ctk.CTkLabel(fr, text=l+":", width=80).pack(side="left")
+        cb = ctk.CTkComboBox(fr, values=v, width=300); cb.pack(side="left"); cb.set(d); self.widgets_manual[l]=cb
+
+    def valider_edition(self, uuid_exist=None):
+        new = {"uuid": uuid_exist if uuid_exist else str(uuid.uuid4())}
+        new["Fichier"] = self.widgets_manual["Fichier"].get(); new["Filter"] = self.widgets_manual["Filter"].get(); new["Input"] = self.widgets_manual["Input"].get()
+        new["Span"] = self.widgets_manual["Span"].get()
+        for col in [c for c in COLONNES_A_AFFICHER if "Derive" not in c]:
+            v = self.widgets_manual[col].get(); new[col] = v if v != "" else "0.0"
+        new, tag = self.calculer_champs(new); new["tag"] = tag
+        if uuid_exist:
+            for i, r in enumerate(self.db_lignes):
+                if r["uuid"] == uuid_exist: self.db_lignes[i] = new; break
+        else: self.db_lignes.append(new); self.fichiers_visibles_set.add(new["Fichier"])
+        self.top_manual.destroy(); self.appliquer_filtres_visuels(None); self.verifier_integrite_inputs(); self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss(); self.update_combos_fichiers()
+
+    def update_combos_fichiers(self):
+        f = list(set([r["Fichier"] for r in self.db_lignes]))
+        self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
+
+    def choisir_fichiers(self):
+        fs = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
+        if fs: self.fichiers_selectionnes = fs; [self.fichiers_visibles_set.add(os.path.basename(f)) for f in fs]
+
+    def lancer_thread(self):
+        if self.fichiers_selectionnes:
+            self.btn_run.configure(state="disabled"); self.progress.pack(fill="x"); threading.Thread(target=self.process, daemon=True).start()
+        else: self.verifier_integrite_inputs(); self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss()
+
+    def process(self):
+        total = len(self.fichiers_selectionnes)
+        self.db_lignes = [] 
+        
+        for idx, fpath in enumerate(self.fichiers_selectionnes):
+            fname = os.path.basename(fpath)
+            temp_buffer = {} 
+            c_filt, c_inp = "?", "?" # FIX INPUT 4 & 8 : On garde en mémoire d'une page à l'autre !
+            
+            try:
+                with pdfplumber.open(fpath) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text(layout=True); 
+                        if not text: continue
+                        lines = text.split('\n')
+                        
+                        for line in lines:
+                            line = line.strip()
+                            if not line: continue
+                            
+                            # Recherche robuste (si décalage sur la même ligne)
+                            match_f = re.search(r'Filter\s*:\s*([^:\n]+)', line)
+                            if match_f:
+                                extracted_filt = match_f.group(1).split("Input")[0].strip()
+                                if extracted_filt: c_filt = extracted_filt
+                            
+                            match_i = re.search(r'Input\s*:\s*(\d+)', line)
+                            if match_i: c_inp = match_i.group(1)
+                            
+                            if not any(t in c_filt.upper() for t in FILTRES_CIBLES): continue
+                            
+                            match_10 = re.search(r'^\s*10[,.]0(\s|$)', line)
+                            match_2 = re.search(r'^\s*2[,.]0(\s|$)', line)
+                            
+                            if match_10 or match_2:
+                                span_k = "10.0" if match_10 else "2.0"
+                                parts = line.split(); key = (fname, c_filt, c_inp)
+                                if key not in temp_buffer: temp_buffer[key] = {"10.0": {}, "2.0": {}}
+                                
+                                nb = len(parts)
+                                if 3 <= nb <= 5:
+                                    if len(parts) > 1: temp_buffer[key][span_k]["IEPE Comp"] = parts[1]
+                                    if len(parts) > 2: temp_buffer[key][span_k]["IEPE Exc"] = parts[2]
+                                    if len(parts) > 3: temp_buffer[key][span_k]["IEPE Gain"] = parts[3]
+                                elif nb >= 8:
+                                    m = {1:"Offset", 2:"DCGain", 3:"SINL", 4:"MSE", 5:"BWdth", 6:"CMRR", 7:"Noise", 8:"ACCpl"}
+                                    for i, n in m.items():
+                                        if i < len(parts): temp_buffer[key][span_k][n] = parts[i]
+            except Exception as e: print(f"Erreur PDF {fname}: {e}")
+            
+            for key, spans in temp_buffer.items():
+                d10 = spans.get("10.0", {})
+                d2 = spans.get("2.0", {})
+                
+                dcgain_10 = str(d10.get("DCGain", ""))
+                mse_10 = str(d10.get("MSE", ""))
+                is_na = (not dcgain_10 or not mse_10 or "NA" in dcgain_10.upper() or "NA" in mse_10.upper())
+                
+                if is_na and d2:
+                    row_data = d2.copy()
+                    row_data["Span"] = "2.0" 
+                    for iepe_k in ["IEPE Comp", "IEPE Exc", "IEPE Gain"]:
+                        if iepe_k in d10: row_data[iepe_k] = d10[iepe_k]
+                else:
+                    row_data = d10.copy()
+                    row_data["Span"] = "10.0" 
+                    
+                if not row_data: continue
+                
+                row_data["Fichier"] = key[0]; row_data["Filter"] = key[1]; row_data["Input"] = key[2]
+                row_data["uuid"] = str(uuid.uuid4())
+                row_c, tag = self.calculer_champs(row_data); row_c["tag"] = tag; self.db_lignes.append(row_c)
+                
+            self.after(0, self.progress.set, (idx+1)/total)
+        self.after(0, self.finish)
+
+    def finish(self):
+        self.btn_run.configure(state="normal"); self.progress.pack_forget(); self.update_combos_fichiers()
+        # Mise à jour de l'interface en lot (Évite la saturation !)
+        self.appliquer_filtres_visuels(None) 
+        self.after(500, lambda: [self.verifier_integrite_inputs(), self.calculer_et_afficher_incertitudes(), self.calculer_et_afficher_gauss()])
+
+if __name__ == "__main__":
+    app = AnalyseurFiltresApp()
+    app.mainloop()
