@@ -3,6 +3,47 @@ import pandas as pd
 import plotly.express as px
 import datetime
 import uuid
+import pickle  # --- AJOUT
+import os      # --- AJOUT
+
+# ==========================================
+# --- AJOUT : SYSTÈME DE SAUVEGARDE PERMANENTE ---
+# ==========================================
+DATA_FILE = "mes_donnees_projets.pkl"
+
+def save_data():
+    """Sauvegarde l'état actuel dans un fichier physique."""
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump({
+            "projects": st.session_state.get("projects", ["Projet Alpha"]),
+            "categories": st.session_state.get("categories", ["Développement", "Design", "Marketing", "Administratif"]),
+            "tasks": st.session_state.get("tasks", [])
+        }, f)
+
+# Astuce pour ne pas toucher à ton code : on intercepte st.rerun 
+# pour qu'il sauvegarde automatiquement juste avant de recharger la page.
+if "original_rerun" not in st.session_state:
+    st.session_state.original_rerun = st.rerun
+
+def custom_rerun(*args, **kwargs):
+    save_data()
+    st.session_state.original_rerun(*args, **kwargs)
+
+st.rerun = custom_rerun
+
+# Chargement des données au démarrage de l'application
+if "data_loaded" not in st.session_state:
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "rb") as f:
+            saved_data = pickle.load(f)
+            st.session_state.projects = saved_data.get("projects", ["Projet Alpha"])
+            st.session_state.categories = saved_data.get("categories", ["Développement", "Design", "Marketing", "Administratif"])
+            st.session_state.tasks = saved_data.get("tasks", [])
+    st.session_state.data_loaded = True
+# ==========================================
+# --- FIN DE L'AJOUT ---
+# ==========================================
+
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Gestionnaire de Projets Pro", page_icon="🚀", layout="wide")
@@ -251,3 +292,8 @@ elif menu == "📅 Diagramme de Gantt":
             fig_gantt.update_yaxes(autorange="reversed")
             fig_gantt.update_layout(xaxis_title="Date", yaxis_title="Tâches", showlegend=False)
             st.plotly_chart(fig_gantt, use_container_width=True)
+
+# ==========================================
+# --- AJOUT : SAUVEGARDE EN FIN DE SCRIPT ---
+# ==========================================
+save_data()
