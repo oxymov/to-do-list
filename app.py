@@ -3,47 +3,65 @@ import pandas as pd
 import plotly.express as px
 import datetime
 import uuid
-import pickle  # --- AJOUT
-import os      # --- AJOUT
+import pickle
+import os
 
 # ==========================================
-# --- AJOUT : SYSTÈME DE SAUVEGARDE PERMANENTE ---
+# --- SYSTÈME DE SAUVEGARDE PERMANENTE ROBUSTE ---
 # ==========================================
 DATA_FILE = "mes_donnees_projets.pkl"
+BACKUP_FILE = "mes_donnees_projets_backup.pkl"
 
 def save_data():
-    """Sauvegarde l'état actuel dans un fichier physique."""
-    with open(DATA_FILE, "wb") as f:
-        pickle.dump({
-            "projects": st.session_state.get("projects", ["Projet Alpha"]),
-            "categories": st.session_state.get("categories", ["Développement", "Design", "Marketing", "Administratif"]),
-            "tasks": st.session_state.get("tasks", [])
-        }, f)
+    """Sauvegarde l'état actuel de manière sécurisée (Anti-crash)."""
+    data_to_save = {
+        "projects": st.session_state.get("projects", ["Projet Alpha"]),
+        "categories": st.session_state.get("categories", ["Développement", "Design", "Marketing", "Administratif"]),
+        "tasks": st.session_state.get("tasks", [])
+    }
+    try:
+        temp_file = DATA_FILE + ".tmp"
+        with open(temp_file, "wb") as f:
+            pickle.dump(data_to_save, f)
+        os.replace(temp_file, DATA_FILE)
+        
+        with open(BACKUP_FILE, "wb") as f:
+            pickle.dump(data_to_save, f)
+    except Exception:
+        pass
 
-# Astuce pour ne pas toucher à ton code : on intercepte st.rerun 
-# pour qu'il sauvegarde automatiquement juste avant de recharger la page.
-if "original_rerun" not in st.session_state:
-    st.session_state.original_rerun = st.rerun
-
-def custom_rerun(*args, **kwargs):
+def save_and_rerun():
+    """La fonction propre pour sauvegarder AVANT de recharger la page."""
     save_data()
-    st.session_state.original_rerun(*args, **kwargs)
+    st.rerun()
 
-st.rerun = custom_rerun
-
-# Chargement des données au démarrage de l'application
+# Chargement des données au démarrage
 if "data_loaded" not in st.session_state:
+    loaded = False
+    
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "rb") as f:
-            saved_data = pickle.load(f)
-            st.session_state.projects = saved_data.get("projects", ["Projet Alpha"])
-            st.session_state.categories = saved_data.get("categories", ["Développement", "Design", "Marketing", "Administratif"])
-            st.session_state.tasks = saved_data.get("tasks", [])
+        try:
+            with open(DATA_FILE, "rb") as f:
+                saved_data = pickle.load(f)
+                st.session_state.projects = saved_data.get("projects", ["Projet Alpha"])
+                st.session_state.categories = saved_data.get("categories", ["Développement", "Design", "Marketing", "Administratif"])
+                st.session_state.tasks = saved_data.get("tasks", [])
+            loaded = True
+        except Exception:
+            pass
+
+    if not loaded and os.path.exists(BACKUP_FILE):
+        try:
+            with open(BACKUP_FILE, "rb") as f:
+                saved_data = pickle.load(f)
+                st.session_state.projects = saved_data.get("projects", ["Projet Alpha"])
+                st.session_state.categories = saved_data.get("categories", ["Développement", "Design", "Marketing", "Administratif"])
+                st.session_state.tasks = saved_data.get("tasks", [])
+        except Exception:
+            pass
+            
     st.session_state.data_loaded = True
 # ==========================================
-# --- FIN DE L'AJOUT ---
-# ==========================================
-
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Gestionnaire de Projets Pro", page_icon="🚀", layout="wide")
@@ -138,7 +156,7 @@ if menu == "📋 Gestion des Tâches":
                 if t_name:
                     add_task(t_project, t_category, t_name, t_desc, t_tools, t_priority, t_start, t_deadline, t_people, t_color)
                     st.success("Tâche ajoutée avec succès !")
-                    st.rerun()
+                    save_and_rerun()  # Remplacé st.rerun() par la fonction sécurisée
                 else:
                     st.error("Le nom de la tâche est obligatoire.")
 
@@ -167,11 +185,11 @@ if menu == "📋 Gestion des Tâches":
                         if st.form_submit_button("💾 Sauvegarder"):
                             t['name'], t['description'], t['tools'], t['people'], t['color'] = e_name, e_desc, e_tools, e_people, e_color
                             st.session_state.editing_task_id = None
-                            st.rerun()
+                            save_and_rerun() # Remplacé st.rerun() par la fonction sécurisée
                     with c2:
                         if st.form_submit_button("❌ Annuler"):
                             st.session_state.editing_task_id = None
-                            st.rerun()
+                            save_and_rerun() # Remplacé st.rerun() par la fonction sécurisée
                 continue # Passe à la tâche suivante sans afficher la vue normale
 
             # Calcul des alertes
@@ -207,10 +225,10 @@ if menu == "📋 Gestion des Tâches":
                 with c4:
                     if st.button("✏️ Modifier", key=f"edit_{t['id']}"):
                         st.session_state.editing_task_id = t["id"]
-                        st.rerun()
+                        save_and_rerun() # Remplacé st.rerun() par la fonction sécurisée
                     if st.button("🗑️ Supprimer", key=f"del_{t['id']}"):
                         delete_task(t["id"])
-                        st.rerun()
+                        save_and_rerun() # Remplacé st.rerun() par la fonction sécurisée
                 
                 # Gestion de la clôture (Fichiers & Commentaires)
                 if t["status"] != "Terminé":
@@ -224,7 +242,7 @@ if menu == "📋 Gestion des Tâches":
                             if finish_file:
                                 t["file_name"] = finish_file.name
                                 t["file_data"] = finish_file.getvalue()
-                            st.rerun()
+                            save_and_rerun() # Remplacé st.rerun() par la fonction sécurisée
                 else:
                     # Affichage du rendu si la tâche est terminée
                     st.success(f"**Commentaire de clôture :** {t['comment'] if t['comment'] else 'Aucun commentaire'}")
@@ -277,7 +295,6 @@ elif menu == "📅 Diagramme de Gantt":
         if df.empty:
              st.info("Aucune tâche pour ce projet.")
         else:
-            # Création d'un dictionnaire de couleurs unique pour chaque tâche
             color_mapping = {row['name']: row['color'] for index, row in df.iterrows()}
             
             fig_gantt = px.timeline(
@@ -285,15 +302,15 @@ elif menu == "📅 Diagramme de Gantt":
                 x_start="start_date", 
                 x_end="deadline", 
                 y="name", 
-                color="name", # On colore par nom de tâche
+                color="name",
                 hover_data=["status", "priority", "people"],
-                color_discrete_map=color_mapping # On applique les couleurs choisies par l'utilisateur
+                color_discrete_map=color_mapping
             )
             fig_gantt.update_yaxes(autorange="reversed")
             fig_gantt.update_layout(xaxis_title="Date", yaxis_title="Tâches", showlegend=False)
             st.plotly_chart(fig_gantt, use_container_width=True)
 
 # ==========================================
-# --- AJOUT : SAUVEGARDE EN FIN DE SCRIPT ---
+# SAUVEGARDE DE FIN DE SCRIPT
 # ==========================================
 save_data()
