@@ -65,7 +65,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.geometry("1650x1000")
         
         self.regles_actives = self.charger_config()
-        self.fichiers_selectionnes = []
+        self.fichiers_selectionnes = [] # Ceci est maintenant notre file d'attente
         self.db_lignes = [] 
         self.fichiers_visibles_set = set()
         self.gauss_details = {}
@@ -169,19 +169,16 @@ class AnalyseurFiltresApp(ctk.CTk):
             for param in ["Gain", "MSE", "Ig"]:
                 ctk.CTkLabel(grid_fr, text=param).grid(row=row_idx, column=2, sticky="e", padx=5)
                 
-                # Bessel
                 e_bes = ctk.CTkEntry(grid_fr, width=70)
                 e_bes.insert(0, str(tols_actuelles["BESSEL"][mode][param]))
                 e_bes.grid(row=row_idx, column=3, pady=2)
                 self.entries_operet["BESSEL"][mode][param] = e_bes
                 
-                # Butterworth
                 e_but = ctk.CTkEntry(grid_fr, width=70)
                 e_but.insert(0, str(tols_actuelles["BUTTERWORTH"][mode][param]))
                 e_but.grid(row=row_idx, column=4, pady=2)
                 self.entries_operet["BUTTERWORTH"][mode][param] = e_but
                 
-                # Wideband
                 e_wid = ctk.CTkEntry(grid_fr, width=70)
                 e_wid.insert(0, str(tols_actuelles["WIDEBAND"][mode][param]))
                 e_wid.grid(row=row_idx, column=5, pady=2)
@@ -202,7 +199,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(self.tab_params, text="Sauvegarder la Configuration", command=self.sauvegarder_params, height=40, fg_color="#1565C0").pack(pady=20)
 
     # --------------------------------------------------------------------------
-    # UI ANALYSE
+    # UI ANALYSE (MISE A JOUR FILE D'ATTENTE)
     # --------------------------------------------------------------------------
     def setup_analyse_ui(self):
         self.tab_analyse.grid_columnconfigure(0, weight=1)
@@ -213,7 +210,15 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         fr_actions = ctk.CTkFrame(top, fg_color="transparent")
         fr_actions.pack(side="left", padx=5)
-        ctk.CTkButton(fr_actions, text="Choisir PDF", command=self.choisir_fichiers, width=100).pack(side="left", padx=2)
+        
+        # Nouveaux boutons pour la file d'attente
+        ctk.CTkButton(fr_actions, text="📄 Fichiers", command=self.choisir_fichiers, width=80).pack(side="left", padx=2)
+        ctk.CTkButton(fr_actions, text="📁 Dossier", command=self.choisir_dossier, width=80).pack(side="left", padx=2)
+        ctk.CTkButton(fr_actions, text="❌ Vider", command=self.vider_file, fg_color="#E74C3C", hover_color="#C0392B", width=60).pack(side="left", padx=2)
+        
+        self.lbl_queue = ctk.CTkLabel(fr_actions, text="File: 0 PDF", font=("Arial", 12, "bold"), text_color="#1565C0")
+        self.lbl_queue.pack(side="left", padx=(5, 15))
+
         ctk.CTkButton(fr_actions, text="➕ Ajout", command=lambda: self.ouvrir_popup_edition(None), fg_color="#F39C12", width=70).pack(side="left", padx=2)
         ctk.CTkButton(fr_actions, text="✏️ Modif", command=self.editer_selection, fg_color="#8E44AD", width=70).pack(side="left", padx=2)
         ctk.CTkButton(fr_actions, text="🗑️ Suppr", command=self.supprimer_selection, fg_color="#C0392B", width=70).pack(side="left", padx=2)
@@ -262,6 +267,52 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree.tag_configure("ok", background="#E6FFFA")
         self.tree.tag_configure("error", background="#FDEDED")
         self.tree.bind("<Double-1>", lambda event: self.editer_selection())
+
+    # --------------------------------------------------------------------------
+    # LOGIQUE DE LA FILE D'ATTENTE (NOUVEAU)
+    # --------------------------------------------------------------------------
+    def update_queue_label(self):
+        if hasattr(self, 'lbl_queue'):
+            self.lbl_queue.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
+
+    def choisir_fichiers(self):
+        fs = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
+        if fs: 
+            for f in fs:
+                if f not in self.fichiers_selectionnes:
+                    self.fichiers_selectionnes.append(f)
+                    self.fichiers_visibles_set.add(os.path.basename(f))
+            self.update_queue_label()
+
+    def choisir_dossier(self):
+        dossier = filedialog.askdirectory(title="Sélectionnez un dossier contenant des PDF")
+        if dossier:
+            nouveaux = 0
+            for root, dirs, files in os.walk(dossier):
+                for file in files:
+                    if file.lower().endswith('.pdf'):
+                        fpath = os.path.join(root, file)
+                        if fpath not in self.fichiers_selectionnes:
+                            self.fichiers_selectionnes.append(fpath)
+                            self.fichiers_visibles_set.add(os.path.basename(fpath))
+                            nouveaux += 1
+            self.update_queue_label()
+            if nouveaux > 0:
+                messagebox.showinfo("Dossier", f"{nouveaux} nouveaux PDF ajoutés à la file d'attente.")
+            else:
+                messagebox.showinfo("Dossier", "Aucun nouveau fichier PDF trouvé dans ce dossier.")
+
+    def vider_file(self):
+        if messagebox.askyesno("Confirmer", "Voulez-vous vider la file d'attente et effacer les résultats actuels ?"):
+            self.fichiers_selectionnes = []
+            self.db_lignes = []
+            self.fichiers_visibles_set = set()
+            self.update_queue_label()
+            self.appliquer_filtres_visuels(None)
+            self.verifier_integrite_inputs()
+            self.calculer_et_afficher_incertitudes()
+            self.calculer_et_afficher_gauss()
+            self.update_combos_fichiers()
 
     # --------------------------------------------------------------------------
     # IMPORT / EXPORT LOGIC
@@ -318,7 +369,6 @@ class AnalyseurFiltresApp(ctk.CTk):
 
                     inp = row.get("Input", "?")
                     
-                    # Tension
                     if filt_key in ["BESSEL", "BUTTERWORTH"]:
                         t_tols = tols_operet[filt_key]["TENSION"]
                         g_ten = self.parse_float(row.get("DCGain"))
@@ -329,7 +379,6 @@ class AnalyseurFiltresApp(ctk.CTk):
                         if abs(e_ten) > t_tols["MSE"]: derives_export.append(f"Input {inp} [{filt_key}] - TENSION MSE : {e_ten:.4f}% > Tol: {t_tols['MSE']}%")
                         if im_ten > t_tols["Ig"]: derives_export.append(f"Input {inp} [{filt_key}] - TENSION I/M : {im_ten:.4f}% > Tol: {t_tols['Ig']}%")
                     
-                    # IEPE uniquement pour WIDEBAND
                     if filt_key == "WIDEBAND":
                         i_tols = tols_operet[filt_key]["IEPE"]
                         g_iepe = self.parse_float(row.get("IEPE Gain"))
@@ -369,7 +418,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
 
     # --------------------------------------------------------------------------
-    # UI COMPARAISON
+    # UI COMPARAISON (THÈME BLEU ARIANE)
     # --------------------------------------------------------------------------
     def setup_comparaison_ui(self):
         top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
@@ -1052,23 +1101,12 @@ class AnalyseurFiltresApp(ctk.CTk):
         f = list(set([r["Fichier"] for r in self.db_lignes]))
         self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
 
-    def choisir_fichiers(self):
-        fs = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
-        if fs: self.fichiers_selectionnes = fs; [self.fichiers_visibles_set.add(os.path.basename(f)) for f in fs]
-
-    def lancer_thread(self):
-        if self.fichiers_selectionnes:
-            self.btn_run.configure(state="disabled"); self.progress.pack(fill="x"); threading.Thread(target=self.process, daemon=True).start()
-        else: self.verifier_integrite_inputs(); self.calculer_et_afficher_incertitudes(); self.calculer_et_afficher_gauss()
-
     def process(self):
         total = len(self.fichiers_selectionnes)
-        self.db_lignes = [] 
-        
         for idx, fpath in enumerate(self.fichiers_selectionnes):
             fname = os.path.basename(fpath)
             temp_buffer = {} 
-            c_filt, c_inp = "?", "?" # FIX INPUT 4 & 8 : On garde en mémoire d'une page à l'autre !
+            c_filt, c_inp = "?", "?" 
             
             try:
                 with pdfplumber.open(fpath) as pdf:
@@ -1081,7 +1119,6 @@ class AnalyseurFiltresApp(ctk.CTk):
                             line = line.strip()
                             if not line: continue
                             
-                            # Recherche robuste (si décalage sur la même ligne)
                             match_f = re.search(r'Filter\s*:\s*([^:\n]+)', line)
                             if match_f:
                                 extracted_filt = match_f.group(1).split("Input")[0].strip()
@@ -1139,7 +1176,6 @@ class AnalyseurFiltresApp(ctk.CTk):
 
     def finish(self):
         self.btn_run.configure(state="normal"); self.progress.pack_forget(); self.update_combos_fichiers()
-        # Mise à jour de l'interface en lot (Évite la saturation !)
         self.appliquer_filtres_visuels(None) 
         self.after(500, lambda: [self.verifier_integrite_inputs(), self.calculer_et_afficher_incertitudes(), self.calculer_et_afficher_gauss()])
 
