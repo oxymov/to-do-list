@@ -74,6 +74,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tooltip_win = None
         
         self.mode = None 
+        
         self.afficher_ecran_connexion()
 
     # --------------------------------------------------------------------------
@@ -149,18 +150,19 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.afficher_ecran_connexion()
 
     # --------------------------------------------------------------------------
-    # UI OPÉRATEUR
+    # UI OPÉRATEUR (SIMPLIFIÉE AVEC MODIFICATION)
     # --------------------------------------------------------------------------
     def setup_accueil_user_ui(self):
         self.tab_accueil.grid_columnconfigure(1, weight=1)
         self.tab_accueil.grid_rowconfigure(1, weight=1)
 
+        # Header: Boutons
         top = ctk.CTkFrame(self.tab_accueil, height=60, fg_color="transparent")
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
         
         ctk.CTkButton(top, text="📄 Fichiers", command=self.choisir_fichiers, width=90).pack(side="left", padx=5)
         ctk.CTkButton(top, text="📁 Dossier", command=self.choisir_dossier, width=90).pack(side="left", padx=5)
-        ctk.CTkButton(top, text="❌ Vider", command=self.vider_file, fg_color="#E74C3C", hover_color="#C0392B", width=70).pack(side="left", padx=5)
+        ctk.CTkButton(top, text="❌ Tout Vider", command=self.vider_file, fg_color="#E74C3C", hover_color="#C0392B", width=70).pack(side="left", padx=5)
         
         self.lbl_queue_user = ctk.CTkLabel(top, text="File: 0 PDF", font=("Arial", 12, "bold"), text_color="#1565C0")
         self.lbl_queue_user.pack(side="left", padx=(10, 20))
@@ -169,17 +171,38 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         self.btn_run_user = ctk.CTkButton(top, text="▶ LANCER L'ANALYSE", command=self.lancer_thread, fg_color="#1565C0", font=("Arial", 14, "bold"), height=35)
         self.btn_run_user.pack(side="right", padx=10)
+        
+        # Barre de progression (Placée juste avant le bouton Lancer)
+        self.progress_user = ctk.CTkProgressBar(top, width=200)
+        self.progress_user.pack(side="right", padx=10)
+        self.progress_user.pack_forget()
 
-        left_fr = ctk.CTkFrame(self.tab_accueil, width=250, fg_color="white")
+        # Left Column: Fichiers Chargés
+        left_fr = ctk.CTkFrame(self.tab_accueil, width=320, fg_color="white")
         left_fr.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
         
         ctk.CTkLabel(left_fr, text="Fichiers dans la file", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=5)
-        self.user_file_list = tk.Listbox(left_fr, font=("Arial", 10), selectbackground="#D6EAF8")
-        self.user_file_list.pack(fill="both", expand=True, padx=5, pady=5)
         
+        list_fr = ctk.CTkFrame(left_fr, fg_color="transparent")
+        list_fr.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        self.user_file_list = tk.Listbox(list_fr, font=("Arial", 10), selectbackground="#D6EAF8")
+        hsb_list = ttk.Scrollbar(list_fr, orient="horizontal", command=self.user_file_list.xview)
+        vsb_list = ttk.Scrollbar(list_fr, orient="vertical", command=self.user_file_list.yview)
+        self.user_file_list.configure(xscrollcommand=hsb_list.set, yscrollcommand=vsb_list.set)
+        
+        vsb_list.pack(side="right", fill="y")
+        hsb_list.pack(side="bottom", fill="x")
+        self.user_file_list.pack(side="left", fill="both", expand=True)
+        
+        btn_del_file = ctk.CTkButton(left_fr, text="🗑️ Enlever sélection", fg_color="#E74C3C", hover_color="#C0392B", command=self.enlever_fichier_selectionne_user, width=150)
+        btn_del_file.pack(pady=(0, 10))
+        
+        # Right Column: Tolérances & Bilan
         right_fr = ctk.CTkFrame(self.tab_accueil, fg_color="transparent")
         right_fr.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
         
+        # Tolérances
         tols_fr = ctk.CTkFrame(right_fr, fg_color="#E6F0FA")
         tols_fr.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(tols_fr, text="Tolérances Actives (Double-cliquez sur une valeur pour la modifier)", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=5)
@@ -192,13 +215,21 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tv_tols_user.pack(fill="x", padx=10, pady=(0, 10))
         self.tv_tols_user.bind("<Double-1>", self.modifier_tolerance_user)
 
+        # Zone Bilan (Intelligente)
         bilan_fr = ctk.CTkFrame(right_fr, fg_color="white", border_width=2, border_color="#BDC3C7")
         bilan_fr.pack(fill="both", expand=True)
         
-        self.lbl_bilan_status = ctk.CTkLabel(bilan_fr, text="En attente de lancement...", font=("Arial", 20, "bold"), text_color="gray")
+        # Conteneur pour centrer le texte
+        self.bilan_inner_fr = ctk.CTkFrame(bilan_fr, fg_color="transparent")
+        self.bilan_inner_fr.place(relx=0.5, rely=0.5, anchor="center")
+        
+        self.lbl_bilan_status = ctk.CTkLabel(self.bilan_inner_fr, text="En attente de lancement...", font=("Arial", 20, "bold"), text_color="gray", justify="center")
         self.lbl_bilan_status.pack(pady=15)
         
-        self.user_nok_tree = ttk.Treeview(bilan_fr, columns=["Fichier", "Input", "Mode", "Paramètre", "Valeur", "Limite"], show="headings", height=10)
+        # Conteneur pour le tableau des défauts (caché par défaut)
+        self.tree_nok_container = ctk.CTkFrame(bilan_fr, fg_color="transparent")
+        
+        self.user_nok_tree = ttk.Treeview(self.tree_nok_container, columns=["Fichier", "Input", "Mode", "Paramètre", "Valeur", "Limite"], show="headings", height=10)
         self.user_nok_tree.heading("Fichier", text="Fichier"); self.user_nok_tree.column("Fichier", width=120)
         self.user_nok_tree.heading("Input", text="Inp"); self.user_nok_tree.column("Input", width=50, anchor="center")
         self.user_nok_tree.heading("Mode", text="Mode (Filtre)"); self.user_nok_tree.column("Mode", width=120, anchor="center")
@@ -207,14 +238,23 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.user_nok_tree.heading("Limite", text="Tolérance Max"); self.user_nok_tree.column("Limite", width=100, anchor="center")
         self.user_nok_tree.tag_configure("red", background="#FADBD8", foreground="#C0392B")
         
-        vsb_nok = ttk.Scrollbar(bilan_fr, orient="vertical", command=self.user_nok_tree.yview)
-        self.user_nok_tree.configure(yscrollcommand=vsb_nok.set)
-        self.user_nok_tree.pack(side="left", fill="both", expand=True, padx=(10,0), pady=10)
-        vsb_nok.pack(side="right", fill="y", pady=10, padx=(0,10))
+        self.vsb_nok = ttk.Scrollbar(self.tree_nok_container, orient="vertical", command=self.user_nok_tree.yview)
+        self.user_nok_tree.configure(yscrollcommand=self.vsb_nok.set)
 
-        self.progress_user = ctk.CTkProgressBar(self.tab_accueil)
-        self.progress_user.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
-        self.progress_user.grid_remove()
+    def enlever_fichier_selectionne_user(self):
+        selection = self.user_file_list.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        file_name = self.user_file_list.get(idx)
+        
+        for fpath in self.fichiers_selectionnes:
+            if os.path.basename(fpath) == file_name:
+                self.fichiers_selectionnes.remove(fpath)
+                if file_name in self.fichiers_visibles_set:
+                    self.fichiers_visibles_set.remove(file_name)
+                break
+        self.update_queue_label()
 
     def rafraichir_tableau_tolerances_user(self):
         if not hasattr(self, 'tv_tols_user'): return
@@ -223,7 +263,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         for f_k in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
             for m_k in ["TENSION", "IEPE"]:
                 t = tols_operet[f_k][m_k]
-                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"±{t['Gain']}%", f"{t['MSE']}%", f"{t['Ig']}%"))
+                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"{t['Gain']}", f"{t['MSE']}", f"{t['Ig']}"))
 
     def modifier_tolerance_user(self, event):
         item = self.tv_tols_user.identify_row(event.y)
@@ -259,8 +299,10 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.user_nok_tree.delete(*self.user_nok_tree.get_children())
             TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
             noks = []
+            count_mesures = 0
             
             for row in self.db_lignes:
+                count_mesures += 1
                 filt_name = str(row["Filter"]).upper()
                 if "BESSEL" in filt_name: filt_key = "BESSEL"
                 elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
@@ -291,9 +333,21 @@ class AnalyseurFiltresApp(ctk.CTk):
                     if im_i > tols["Ig"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "I/M", f"{im_i:.4f}%", f"{tols['Ig']}%"))
 
             if not noks:
-                self.lbl_bilan_status.configure(text="✅ TOUS LES CAPTEURS SONT CONFORMES (ZÉRO DÉFAUT)", text_color="#196F3D")
+                self.tree_nok_container.pack_forget()
+                self.bilan_inner_fr.place(relx=0.5, rely=0.5, anchor="center")
+                if count_mesures > 0:
+                    self.lbl_bilan_status.configure(text=f"✅ TOUS LES CAPTEURS SONT CONFORMES\n({count_mesures} voies analysées avec succès)", text_color="#196F3D")
+                else:
+                    self.lbl_bilan_status.configure(text="En attente de lancement...", text_color="gray")
             else:
-                self.lbl_bilan_status.configure(text=f"❌ ATTENTION : {len(noks)} DÉFAUT(S) DÉTECTÉ(S)", text_color="#C0392B")
+                self.bilan_inner_fr.place_forget()
+                self.bilan_inner_fr.pack(pady=(10, 5))
+                self.lbl_bilan_status.configure(text=f"❌ ATTENTION : {len(noks)} DÉFAUT(S) DÉTECTÉ(S)\n(sur {count_mesures} voies analysées)", text_color="#C0392B")
+                
+                self.tree_nok_container.pack(fill="both", expand=True, padx=10, pady=10)
+                self.user_nok_tree.pack(side="left", fill="both", expand=True)
+                self.vsb_nok.pack(side="right", fill="y")
+                
                 for n in noks:
                     self.user_nok_tree.insert("", "end", values=n, tags=("red",))
         except Exception as e: print(f"Erreur bilan: {e}")
@@ -448,7 +502,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.btn_run.pack(side="right", padx=10)
 
         self.progress = ctk.CTkProgressBar(top)
-        self.progress.pack(side="bottom", fill="x")
+        self.progress.pack(side="right", padx=10)
         self.progress.pack_forget()
 
         frame_table = ctk.CTkFrame(self.tab_analyse, fg_color="transparent")
@@ -477,7 +531,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree.bind("<Double-1>", lambda event: self.editer_selection())
 
     # --------------------------------------------------------------------------
-    # LOGIQUE DE LA FILE D'ATTENTE
+    # LOGIQUE DE LA FILE D'ATTENTE GLOBALE
     # --------------------------------------------------------------------------
     def update_queue_label(self):
         try:
@@ -635,7 +689,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
 
     # --------------------------------------------------------------------------
-    # UI COMPARAISON
+    # UI COMPARAISON (THÈME BLEU ARIANE)
     # --------------------------------------------------------------------------
     def setup_comparaison_ui(self):
         top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
@@ -1197,7 +1251,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.tree_gauss_pct.insert("", "end", values=row_vals_pct, tags=(interval_tags[i],))
 
     # --------------------------------------------------------------------------
-    # LOGIQUE INCERTITUDES
+    # LOGIQUE INCERTITUDES (ADMIN)
     # --------------------------------------------------------------------------
     def calculer_et_afficher_incertitudes(self):
         if self.mode != "admin": return
@@ -1415,7 +1469,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                     self.progress.pack(side="bottom", fill="x")
                 elif self.mode == "user":
                     self.btn_run_user.configure(state="disabled")
-                    self.progress_user.grid()
+                    self.progress_user.pack(side="right", padx=10)
             except Exception as e:
                 print(e)
                 
@@ -1524,7 +1578,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                 self.after(500, lambda: [self.verifier_integrite_inputs(), self.calculer_et_afficher_incertitudes(), self.calculer_et_afficher_gauss()])
             elif self.mode == "user":
                 self.btn_run_user.configure(state="normal")
-                self.progress_user.grid_remove()
+                self.progress_user.pack_forget()
                 self.after(500, lambda: [self.calculer_bilan_user(), self.calculer_et_afficher_gauss()])
         except Exception as e: print(f"Erreur Finish: {e}")
 
