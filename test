@@ -65,10 +65,13 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.geometry("1650x1000")
         
         self.regles_actives = self.charger_config()
-        self.fichiers_selectionnes = [] # File d'attente des PDF
+        self.fichiers_selectionnes = [] 
         self.db_lignes = [] 
         self.fichiers_visibles_set = set()
-        self.gauss_details = {}
+        
+        # Structures séparées pour les deux tableaux gaussiens
+        self.gauss_details_direct = {}
+        self.gauss_details_pct = {}
         self.tooltip_win = None
 
         self.tabview = ctk.CTkTabview(self)
@@ -199,7 +202,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(self.tab_params, text="Sauvegarder la Configuration", command=self.sauvegarder_params, height=40, fg_color="#1565C0").pack(pady=20)
 
     # --------------------------------------------------------------------------
-    # UI ANALYSE (AVEC GESTION FILE D'ATTENTE)
+    # UI ANALYSE
     # --------------------------------------------------------------------------
     def setup_analyse_ui(self):
         self.tab_analyse.grid_columnconfigure(0, weight=1)
@@ -211,7 +214,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         fr_actions = ctk.CTkFrame(top, fg_color="transparent")
         fr_actions.pack(side="left", padx=5)
         
-        # Nouveaux boutons pour la gestion des PDF
         ctk.CTkButton(fr_actions, text="📄 Fichiers", command=self.choisir_fichiers, width=80).pack(side="left", padx=2)
         ctk.CTkButton(fr_actions, text="📁 Dossier", command=self.choisir_dossier, width=80).pack(side="left", padx=2)
         ctk.CTkButton(fr_actions, text="❌ Vider", command=self.vider_file, fg_color="#E74C3C", hover_color="#C0392B", width=60).pack(side="left", padx=2)
@@ -268,9 +270,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree.tag_configure("error", background="#FDEDED")
         self.tree.bind("<Double-1>", lambda event: self.editer_selection())
 
-    # --------------------------------------------------------------------------
-    # LOGIQUE DE LA FILE D'ATTENTE
-    # --------------------------------------------------------------------------
     def update_queue_label(self):
         if hasattr(self, 'lbl_queue'):
             self.lbl_queue.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
@@ -380,7 +379,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                     if filt_key == "WIDEBAND":
                         i_tols = tols_operet[filt_key]["IEPE"]
                         g_iepe = self.parse_float(row.get("IEPE Gain"))
-                        e_iepe_mse = self.parse_float(row.get("MSE")) 
+                        e_iepe_mse = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
                         im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe_mse**2)
                         
                         if abs(g_iepe) > i_tols["Gain"]: derives_export.append(f"Input {inp} [WIDEBAND] - IEPE Gain : {g_iepe:.4f}% > Tol: {i_tols['Gain']}%")
@@ -416,7 +415,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
 
     # --------------------------------------------------------------------------
-    # UI COMPARAISON (THÈME BLEU ARIANE)
+    # UI COMPARAISON
     # --------------------------------------------------------------------------
     def setup_comparaison_ui(self):
         top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
@@ -424,7 +423,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         ctk.CTkLabel(top_c, text="Historique & Comparaison des Dérives", font=("Arial", 16, "bold"), text_color="#0033A0").pack(side="left")
         
-        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
+        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers (Ajustement)", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Charger un Export (.json)", font=("Arial", 12, "bold"), fg_color="#0033A0", hover_color="#002277", command=self.charger_fichier_comparaison).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Effacer", fg_color="#C0392B", width=80, command=self.effacer_comparaisons).pack(side="right", padx=5)
 
@@ -739,50 +738,83 @@ class AnalyseurFiltresApp(ctk.CTk):
             tree.tag_configure("red", background="#FADBD8")
 
     # --------------------------------------------------------------------------
-    # UI DISTRIBUTION GAUSSIENNE
+    # UI DISTRIBUTION GAUSSIENNE (DOUBLE TABLEAU)
     # --------------------------------------------------------------------------
     def setup_gauss_ui(self):
         top_g = ctk.CTkFrame(self.tab_gauss, height=60, fg_color="transparent")
-        top_g.pack(fill="x", padx=10, pady=10)
+        top_g.pack(fill="x", padx=10, pady=5)
         
-        ctk.CTkLabel(top_g, text="Répartition Statistique des Mesures (% de la Tolérance)", font=("Arial", 16, "bold"), text_color="#1565C0").pack(side="left")
+        ctk.CTkLabel(top_g, text="Répartition Statistique des Mesures", font=("Arial", 16, "bold"), text_color="#1565C0").pack(side="left")
         ctk.CTkButton(top_g, text="🔄 CALCULER RÉPARTITION", fg_color="#1565C0", command=self.calculer_et_afficher_gauss).pack(side="right", padx=10)
 
-        desc = "L'histogramme est vertical. Les couleurs indiquent la conformité :\n🟩 Idéal (Centré)   |   🟧 Dérive acceptable   |   🟥 Hors Tolérance / Critique\n👉 Survolez une case avec la souris pour voir la liste des capteurs correspondants."
-        ctk.CTkLabel(self.tab_gauss, text=desc, justify="left", font=("Arial", 12, "bold")).pack(anchor="w", padx=15, pady=(0,10))
+        desc = "🟩 Idéal (Centré)   |   🟧 Dérive acceptable   |   🟥 Hors Tolérance / Critique\n👉 Survolez une case avec la souris pour voir la liste des capteurs correspondants."
+        ctk.CTkLabel(self.tab_gauss, text=desc, justify="left", font=("Arial", 11, "bold")).pack(anchor="w", padx=15, pady=(0,5))
 
-        frame_g = ctk.CTkFrame(self.tab_gauss, fg_color="white")
-        frame_g.pack(fill="both", expand=True, padx=10, pady=10)
+        main_g = ctk.CTkFrame(self.tab_gauss, fg_color="transparent")
+        main_g.pack(fill="both", expand=True, padx=10, pady=5)
 
         cols_g = ["Intervalle", "Tension Gain", "Tension MSE", "Tension I/M", "IEPE Gain", "IEPE MSE", "IEPE I/M"]
         
-        self.tree_gauss = ttk.Treeview(frame_g, columns=cols_g, show="headings", height=18)
-        hsb_g = ttk.Scrollbar(frame_g, orient="horizontal", command=self.tree_gauss.xview)
-        self.tree_gauss.configure(xscrollcommand=hsb_g.set)
+        # --- 1. TABLEAU VALEURS DIRECTES ---
+        frame_g1 = ctk.CTkFrame(main_g, fg_color="white")
+        frame_g1.pack(fill="both", expand=True, pady=(0, 5))
+        ctk.CTkLabel(frame_g1, text="1. Valeurs Brutes (en %)", font=("Arial", 12, "bold"), text_color="#2980B9").pack(anchor="w", padx=5, pady=2)
+        
+        self.tree_gauss_direct = ttk.Treeview(frame_g1, columns=cols_g, show="headings", height=8)
+        hsb_g1 = ttk.Scrollbar(frame_g1, orient="horizontal", command=self.tree_gauss_direct.xview)
+        self.tree_gauss_direct.configure(xscrollcommand=hsb_g1.set)
         
         for i, c in enumerate(cols_g):
-            self.tree_gauss.heading(c, text=c)
+            self.tree_gauss_direct.heading(c, text=c)
             w = 180 if i == 0 else 120
             anc = "w" if i == 0 else "center"
-            self.tree_gauss.column(c, width=w, anchor=anc)
+            self.tree_gauss_direct.column(c, width=w, anchor=anc)
 
-        self.tree_gauss.tag_configure("green", background="#D5F5E3", font=("Arial", 11))
-        self.tree_gauss.tag_configure("orange", background="#FDEBD0", font=("Arial", 11))
-        self.tree_gauss.tag_configure("red", background="#FADBD8", font=("Arial", 11))
-
-        vsb_g = ttk.Scrollbar(frame_g, orient="vertical", command=self.tree_gauss.yview)
-        self.tree_gauss.configure(yscrollcommand=vsb_g.set)
+        vsb_g1 = ttk.Scrollbar(frame_g1, orient="vertical", command=self.tree_gauss_direct.yview)
+        self.tree_gauss_direct.configure(yscrollcommand=vsb_g1.set)
+        hsb_g1.pack(side="bottom", fill="x")
+        self.tree_gauss_direct.pack(side="left", fill="both", expand=True)
+        vsb_g1.pack(side="right", fill="y")
         
-        hsb_g.pack(side="bottom", fill="x")
-        self.tree_gauss.pack(side="left", fill="both", expand=True)
-        vsb_g.pack(side="right", fill="y")
+        # --- 2. TABLEAU POURCENTAGE TOLERANCE ---
+        frame_g2 = ctk.CTkFrame(main_g, fg_color="white")
+        frame_g2.pack(fill="both", expand=True, pady=(5, 0))
+        ctk.CTkLabel(frame_g2, text="2. Utilisation de la Tolérance (en % de la limite autorisée)", font=("Arial", 12, "bold"), text_color="#8E44AD").pack(anchor="w", padx=5, pady=2)
         
-        self.tree_gauss.bind("<Motion>", self.on_gauss_hover)
-        self.tree_gauss.bind("<Leave>", self.hide_tooltip)
+        self.tree_gauss_pct = ttk.Treeview(frame_g2, columns=cols_g, show="headings", height=8)
+        hsb_g2 = ttk.Scrollbar(frame_g2, orient="horizontal", command=self.tree_gauss_pct.xview)
+        self.tree_gauss_pct.configure(xscrollcommand=hsb_g2.set)
+        
+        for i, c in enumerate(cols_g):
+            self.tree_gauss_pct.heading(c, text=c)
+            w = 180 if i == 0 else 120
+            anc = "w" if i == 0 else "center"
+            self.tree_gauss_pct.column(c, width=w, anchor=anc)
 
-    def on_gauss_hover(self, event):
-        item = self.tree_gauss.identify_row(event.y)
-        col = self.tree_gauss.identify_column(event.x)
+        vsb_g2 = ttk.Scrollbar(frame_g2, orient="vertical", command=self.tree_gauss_pct.yview)
+        self.tree_gauss_pct.configure(yscrollcommand=vsb_g2.set)
+        hsb_g2.pack(side="bottom", fill="x")
+        self.tree_gauss_pct.pack(side="left", fill="both", expand=True)
+        vsb_g2.pack(side="right", fill="y")
+
+        # Tags et Bindings pour les deux tableaux
+        for t in [self.tree_gauss_direct, self.tree_gauss_pct]:
+            t.tag_configure("green", background="#D5F5E3", font=("Arial", 11))
+            t.tag_configure("orange", background="#FDEBD0", font=("Arial", 11))
+            t.tag_configure("red", background="#FADBD8", font=("Arial", 11))
+
+        self.tree_gauss_direct.bind("<Motion>", lambda e: self.on_gauss_hover(e, "direct"))
+        self.tree_gauss_direct.bind("<Leave>", self.hide_tooltip)
+        
+        self.tree_gauss_pct.bind("<Motion>", lambda e: self.on_gauss_hover(e, "pct"))
+        self.tree_gauss_pct.bind("<Leave>", self.hide_tooltip)
+
+    def on_gauss_hover(self, event, mode):
+        tree = self.tree_gauss_direct if mode == "direct" else self.tree_gauss_pct
+        details_dict = self.gauss_details_direct if mode == "direct" else self.gauss_details_pct
+        
+        item = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)
         
         if not item or not col or col == "#1":
             self.hide_tooltip()
@@ -796,10 +828,10 @@ class AnalyseurFiltresApp(ctk.CTk):
             return
             
         param_name = params_order[col_idx]
-        try: row_idx = self.tree_gauss.index(item)
+        try: row_idx = tree.index(item)
         except: self.hide_tooltip(); return
 
-        details = self.gauss_details.get(param_name, {}).get(row_idx, [])
+        details = details_dict.get(param_name, {}).get(row_idx, [])
         if not details: self.hide_tooltip(); return
             
         text = f"Détails ({param_name}) :\n" + "-"*30 + "\n"
@@ -830,11 +862,17 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.tooltip_win = None
 
     def calculer_et_afficher_gauss(self):
-        self.tree_gauss.delete(*self.tree_gauss.get_children())
+        self.tree_gauss_direct.delete(*self.tree_gauss_direct.get_children())
+        self.tree_gauss_pct.delete(*self.tree_gauss_pct.get_children())
+        
         TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
         params = ["Tension Gain", "Tension MSE", "Tension I/M", "IEPE Gain", "IEPE MSE", "IEPE I/M"]
-        bins = {p: [0]*17 for p in params}
-        self.gauss_details = {p: {i: [] for i in range(17)} for p in params}
+        
+        bins_dir = {p: [0]*17 for p in params}
+        bins_pct = {p: [0]*17 for p in params}
+        
+        self.gauss_details_direct = {p: {i: [] for i in range(17)} for p in params}
+        self.gauss_details_pct = {p: {i: [] for i in range(17)} for p in params}
         
         def get_bin_index(pct):
             if pct < -100: return 0
@@ -874,27 +912,47 @@ class AnalyseurFiltresApp(ctk.CTk):
                 e_t = self.parse_float(row.get("MSE"))
                 im_t = 2 * math.sqrt(g_t**2 + e_t**2)
                 
-                p_gt = (g_t / tols_t["Gain"]) * 100 if tols_t["Gain"] else 0
-                p_et = (e_t / tols_t["MSE"]) * 100 if tols_t["MSE"] else 0
-                p_imt = (im_t / tols_t["Ig"]) * 100 if tols_t["Ig"] else 0
+                # Direct
+                p_gt_dir = g_t
+                p_et_dir = e_t
+                p_imt_dir = im_t
                 
-                idx = get_bin_index(p_gt); bins["Tension Gain"][idx] += 1; self.gauss_details["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
-                idx = get_bin_index(p_et); bins["Tension MSE"][idx] += 1; self.gauss_details["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
-                idx = get_bin_index(p_imt); bins["Tension I/M"][idx] += 1; self.gauss_details["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
-            
+                idx = get_bin_index(p_gt_dir); bins_dir["Tension Gain"][idx] += 1; self.gauss_details_direct["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
+                idx = get_bin_index(p_et_dir); bins_dir["Tension MSE"][idx] += 1; self.gauss_details_direct["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
+                idx = get_bin_index(p_imt_dir); bins_dir["Tension I/M"][idx] += 1; self.gauss_details_direct["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
+                
+                # Percentage
+                p_gt_pct = (g_t / tols_t["Gain"]) * 100 if tols_t["Gain"] else 0
+                p_et_pct = (e_t / tols_t["MSE"]) * 100 if tols_t["MSE"] else 0
+                p_imt_pct = (im_t / tols_t["Ig"]) * 100 if tols_t["Ig"] else 0
+                
+                idx = get_bin_index(p_gt_pct); bins_pct["Tension Gain"][idx] += 1; self.gauss_details_pct["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {p_gt_pct:.1f}%")
+                idx = get_bin_index(p_et_pct); bins_pct["Tension MSE"][idx] += 1; self.gauss_details_pct["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {p_et_pct:.1f}%")
+                idx = get_bin_index(p_imt_pct); bins_pct["Tension I/M"][idx] += 1; self.gauss_details_pct["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {p_imt_pct:.1f}%")
+
             if filt_key == "WIDEBAND":
                 tols_i = TOLS[filt_key]["IEPE"]
                 g_i = self.parse_float(row.get("IEPE Gain"))
-                e_i = self.parse_float(row.get("MSE")) 
+                e_i = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
                 im_i = 2 * math.sqrt(g_i**2 + e_i**2)
                 
-                p_gi = (g_i / tols_i["Gain"]) * 100 if tols_i["Gain"] else 0
-                p_ei = (e_i / tols_i["MSE"]) * 100 if tols_i["MSE"] else 0
-                p_imi = (im_i / tols_i["Ig"]) * 100 if tols_i["Ig"] else 0
+                # Direct
+                p_gi_dir = g_i
+                p_ei_dir = e_i
+                p_imi_dir = im_i
                 
-                idx = get_bin_index(p_gi); bins["IEPE Gain"][idx] += 1; self.gauss_details["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
-                idx = get_bin_index(p_ei); bins["IEPE MSE"][idx] += 1; self.gauss_details["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
-                idx = get_bin_index(p_imi); bins["IEPE I/M"][idx] += 1; self.gauss_details["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
+                idx = get_bin_index(p_gi_dir); bins_dir["IEPE Gain"][idx] += 1; self.gauss_details_direct["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
+                idx = get_bin_index(p_ei_dir); bins_dir["IEPE MSE"][idx] += 1; self.gauss_details_direct["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
+                idx = get_bin_index(p_imi_dir); bins_dir["IEPE I/M"][idx] += 1; self.gauss_details_direct["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
+                
+                # Percentage
+                p_gi_pct = (g_i / tols_i["Gain"]) * 100 if tols_i["Gain"] else 0
+                p_ei_pct = (e_i / tols_i["MSE"]) * 100 if tols_i["MSE"] else 0
+                p_imi_pct = (im_i / tols_i["Ig"]) * 100 if tols_i["Ig"] else 0
+                
+                idx = get_bin_index(p_gi_pct); bins_pct["IEPE Gain"][idx] += 1; self.gauss_details_pct["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {p_gi_pct:.1f}%")
+                idx = get_bin_index(p_ei_pct); bins_pct["IEPE MSE"][idx] += 1; self.gauss_details_pct["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {p_ei_pct:.1f}%")
+                idx = get_bin_index(p_imi_pct); bins_pct["IEPE I/M"][idx] += 1; self.gauss_details_pct["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {p_imi_pct:.1f}%")
 
         interval_labels = [
             "🟥 <-100%", "🟥 [-100 à -45[", "🟧 [-45 à -25[", "🟧 [-25 à -20[", 
@@ -910,11 +968,18 @@ class AnalyseurFiltresApp(ctk.CTk):
         ]
 
         for i in range(17):
-            row_vals = [interval_labels[i]]
+            row_vals_dir = [interval_labels[i]]
+            row_vals_pct = [interval_labels[i]]
+            
             for p in params:
-                val = bins[p][i]
-                row_vals.append(str(val) if val > 0 else "-")
-            self.tree_gauss.insert("", "end", values=row_vals, tags=(interval_tags[i],))
+                v_dir = bins_dir[p][i]
+                v_pct = bins_pct[p][i]
+                
+                row_vals_dir.append(str(v_dir) if v_dir > 0 else "-")
+                row_vals_pct.append(str(v_pct) if v_pct > 0 else "-")
+                
+            self.tree_gauss_direct.insert("", "end", values=row_vals_dir, tags=(interval_tags[i],))
+            self.tree_gauss_pct.insert("", "end", values=row_vals_pct, tags=(interval_tags[i],))
 
     # --------------------------------------------------------------------------
     # LOGIQUE INCERTITUDES
@@ -951,7 +1016,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             if filt_key == "WIDEBAND":
                 tols_iepe = TOLS[filt_key]["IEPE"]
                 g_iepe = self.parse_float(row.get("IEPE Gain"))
-                e_iepe_mse = self.parse_float(row.get("MSE")) 
+                e_iepe_mse = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
                 im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe_mse**2)
                 
                 fails_iepe = []
@@ -1104,18 +1169,8 @@ class AnalyseurFiltresApp(ctk.CTk):
         f = list(set([r["Fichier"] for r in self.db_lignes]))
         self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
 
-    def lancer_thread(self):
-        if self.fichiers_selectionnes:
-            self.btn_run.configure(state="disabled")
-            self.progress.pack(fill="x")
-            threading.Thread(target=self.process, daemon=True).start()
-        else:
-            messagebox.showinfo("Info", "Veuillez d'abord ajouter des fichiers (Fichiers ou Dossier).")
-
     def process(self):
         total = len(self.fichiers_selectionnes)
-        self.db_lignes = [] 
-        
         for idx, fpath in enumerate(self.fichiers_selectionnes):
             fname = os.path.basename(fpath)
             temp_buffer = {} 
