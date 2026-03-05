@@ -93,21 +93,31 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         btn_user = ctk.CTkButton(center_box, text="👨‍🔧 Mode Opérateur", font=("Arial", 16, "bold"), height=50, width=250, fg_color="#27AE60", hover_color="#1E8449", command=lambda: self.demarrer_application("user"))
         btn_user.pack(pady=10, padx=40)
-        ctk.CTkLabel(center_box, text="Analyse rapide, rapport Go/No-Go", font=("Arial", 11, "italic"), text_color="gray").pack(pady=(0, 20))
+        ctk.CTkLabel(center_box, text="Analyse rapide, modification simple, rapport Go/No-Go", font=("Arial", 11, "italic"), text_color="gray").pack(pady=(0, 20))
         
         btn_admin = ctk.CTkButton(center_box, text="⚙️ Mode Administrateur", font=("Arial", 16, "bold"), height=50, width=250, fg_color="#0033A0", hover_color="#002277", command=lambda: self.demarrer_application("admin"))
         btn_admin.pack(pady=10, padx=40)
-        ctk.CTkLabel(center_box, text="Gestion complète, modification, paramètres", font=("Arial", 11, "italic"), text_color="gray").pack(pady=(0, 30))
+        ctk.CTkLabel(center_box, text="Gestion complète, base de données brute, configuration", font=("Arial", 11, "italic"), text_color="gray").pack(pady=(0, 30))
 
     def demarrer_application(self, mode):
         self.mode = mode
         self.login_frame.destroy()
         
+        # --- BARRE SUPÉRIEURE (GLOBALE) ---
+        self.top_bar = ctk.CTkFrame(self, fg_color="transparent", height=40)
+        self.top_bar.pack(fill="x", padx=10, pady=(10, 0))
+        
+        lbl_mode = ctk.CTkLabel(self.top_bar, text=f"Mode : {'Opérateur' if mode == 'user' else 'Administrateur'}", font=("Arial", 14, "bold"), text_color="#27AE60" if mode == 'user' else "#0033A0")
+        lbl_mode.pack(side="left", padx=10)
+        
+        btn_retour = ctk.CTkButton(self.top_bar, text="🔄 Changer de profil", command=self.retour_accueil, fg_color="#F39C12", hover_color="#D68910", width=150)
+        btn_retour.pack(side="right", padx=10)
+        
+        # --- TABVIEW PRINCIPAL ---
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+        self.tabview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
         if self.mode == "admin":
-            # --- TABS ADMIN ---
             self.tab_analyse = self.tabview.add("Analyse Données")
             self.tab_manquants = self.tabview.add("Rapport Manquants")
             self.tab_incertitude = self.tabview.add("Calcul Incertitudes (OPERET)")
@@ -123,7 +133,6 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.setup_params_ui()
             
         elif self.mode == "user":
-            # --- TABS OPERATEUR ---
             self.tab_accueil = self.tabview.add("Accueil & Bilan")
             self.tab_gauss = self.tabview.add("📊 Distribution (Gauss)")
             self.tab_comparaison = self.tabview.add("Comparaisons")
@@ -132,8 +141,16 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.setup_gauss_ui()
             self.setup_comparaison_ui()
 
+    def retour_accueil(self):
+        if messagebox.askyesno("Changer de profil", "Voulez-vous retourner à l'écran de sélection ? (Vos fichiers en file d'attente seront conservés)"):
+            if hasattr(self, 'top_bar') and self.top_bar:
+                self.top_bar.destroy()
+            if hasattr(self, 'tabview') and self.tabview:
+                self.tabview.destroy()
+            self.afficher_ecran_connexion()
+
     # --------------------------------------------------------------------------
-    # UI OPÉRATEUR (SIMPLIFIÉE)
+    # UI OPÉRATEUR (SIMPLIFIÉE AVEC MODIFICATION)
     # --------------------------------------------------------------------------
     def setup_accueil_user_ui(self):
         self.tab_accueil.grid_columnconfigure(1, weight=1)
@@ -167,21 +184,20 @@ class AnalyseurFiltresApp(ctk.CTk):
         right_fr = ctk.CTkFrame(self.tab_accueil, fg_color="transparent")
         right_fr.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
         
-        # Tolérances (Read Only)
+        # --- NOUVEAU : TOLERANCES MODIFIABLES ---
         tols_fr = ctk.CTkFrame(right_fr, fg_color="#E6F0FA")
         tols_fr.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(tols_fr, text="Tolérances Actives (Pour information)", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=5)
+        ctk.CTkLabel(tols_fr, text="Tolérances Actives (Double-cliquez sur une valeur pour la modifier)", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=5)
         
-        tv_t = ttk.Treeview(tols_fr, columns=["Filtre", "Mode", "Gain", "MSE", "Ig"], show="headings", height=4)
+        self.tv_tols_user = ttk.Treeview(tols_fr, columns=["Filtre", "Mode", "Gain", "MSE", "Ig"], show="headings", height=6)
         for c in ["Filtre", "Mode", "Gain", "MSE", "Ig"]:
-            tv_t.heading(c, text=c); tv_t.column(c, width=100, anchor="center")
+            self.tv_tols_user.heading(c, text=c); self.tv_tols_user.column(c, width=100, anchor="center")
             
-        tols_operet = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
-        for f_k in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
-            for m_k in ["TENSION", "IEPE"]:
-                t = tols_operet[f_k][m_k]
-                tv_t.insert("", "end", values=(f_k, m_k, f"±{t['Gain']}%", f"{t['MSE']}%", f"{t['Ig']}%"))
-        tv_t.pack(fill="x", padx=10, pady=(0, 10))
+        self.rafraichir_tableau_tolerances_user()
+        self.tv_tols_user.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # Binding pour modifier les tolérances
+        self.tv_tols_user.bind("<Double-1>", self.modifier_tolerance_user)
 
         # Zone Bilan
         bilan_fr = ctk.CTkFrame(right_fr, fg_color="white", border_width=2, border_color="#BDC3C7")
@@ -207,6 +223,51 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.progress_user = ctk.CTkProgressBar(self.tab_accueil)
         self.progress_user.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
         self.progress_user.pack_forget()
+
+    def rafraichir_tableau_tolerances_user(self):
+        self.tv_tols_user.delete(*self.tv_tols_user.get_children())
+        tols_operet = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+        for f_k in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
+            for m_k in ["TENSION", "IEPE"]:
+                t = tols_operet[f_k][m_k]
+                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"±{t['Gain']}%", f"{t['MSE']}%", f"{t['Ig']}%"))
+
+    def modifier_tolerance_user(self, event):
+        item = self.tv_tols_user.identify_row(event.y)
+        col = self.tv_tols_user.identify_column(event.x)
+        
+        # On n'autorise la modification que sur les colonnes Gain, MSE, Ig (index #3, #4, #5)
+        if not item or col not in ["#3", "#4", "#5"]:
+            return
+            
+        vals = self.tv_tols_user.item(item, "values")
+        filt_key = vals[0]
+        mode_key = vals[1]
+        
+        param_map = {"#3": "Gain", "#4": "MSE", "#5": "Ig"}
+        param_key = param_map[col]
+        
+        dialog = ctk.CTkInputDialog(text=f"Modifier {param_key} pour {filt_key} - {mode_key} (%) :", title="Modifier Tolérance")
+        new_val = dialog.get_input()
+        
+        if new_val is not None:
+            try:
+                new_float = float(new_val.replace(',', '.'))
+                # Mise à jour
+                self.regles_actives["OPERET"][filt_key][mode_key][param_key] = new_float
+                
+                # Sauvegarde sur le disque
+                with open(FICHIER_CONFIG, 'w') as f:
+                    json.dump(self.regles_actives, f, indent=4)
+                    
+                # Rafraîchir l'affichage et les bilans si des données sont chargées
+                self.rafraichir_tableau_tolerances_user()
+                if self.db_lignes:
+                    self.calculer_bilan_user()
+                    self.calculer_et_afficher_gauss()
+                    
+            except ValueError:
+                messagebox.showerror("Erreur", "Valeur invalide. Veuillez entrer un nombre valide.")
 
     def calculer_bilan_user(self):
         self.user_nok_tree.delete(*self.user_nok_tree.get_children())
@@ -251,7 +312,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                 self.user_nok_tree.insert("", "end", values=n, tags=("red",))
 
     # --------------------------------------------------------------------------
-    # CONFIGURATION
+    # CONFIGURATION (ADMIN)
     # --------------------------------------------------------------------------
     def charger_config(self):
         config = REGLES_DEFAUT.copy()
@@ -360,7 +421,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(self.tab_params, text="Sauvegarder la Configuration", command=self.sauvegarder_params, height=40, fg_color="#1565C0").pack(pady=20)
 
     # --------------------------------------------------------------------------
-    # UI ANALYSE
+    # UI ANALYSE (ADMIN SEULEMENT)
     # --------------------------------------------------------------------------
     def setup_analyse_ui(self):
         self.tab_analyse.grid_columnconfigure(0, weight=1)
@@ -437,7 +498,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         if hasattr(self, 'lbl_queue_user'):
             self.lbl_queue_user.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
         
-        # Maj de la liste visible pour l'utilisateur
         if hasattr(self, 'user_file_list'):
             self.user_file_list.delete(0, tk.END)
             for f in self.fichiers_selectionnes:
@@ -588,7 +648,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
 
     # --------------------------------------------------------------------------
-    # UI COMPARAISON (THÈME BLEU ARIANE)
+    # UI COMPARAISON
     # --------------------------------------------------------------------------
     def setup_comparaison_ui(self):
         top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
@@ -596,7 +656,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         ctk.CTkLabel(top_c, text="Historique & Comparaison des Dérives", font=("Arial", 16, "bold"), text_color="#0033A0").pack(side="left")
         
-        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
+        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers (Ajustement)", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Charger un Export (.json)", font=("Arial", 12, "bold"), fg_color="#0033A0", hover_color="#002277", command=self.charger_fichier_comparaison).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Effacer", fg_color="#C0392B", width=80, command=self.effacer_comparaisons).pack(side="right", padx=5)
 
@@ -833,7 +893,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                     tv.insert("", "end", values=(key[0], key[1], p_label, v1_str, v2_str, "Incomplet"), tags=("neutral",))
 
     # --------------------------------------------------------------------------
-    # UI RAPPORT MANQUANTS (ADMIN SEULEMENT)
+    # UI RAPPORT MANQUANTS (ADMIN)
     # --------------------------------------------------------------------------
     def setup_missing_ui(self):
         top_m = ctk.CTkFrame(self.tab_manquants, height=50, fg_color="transparent")
@@ -858,7 +918,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree_missing.tag_configure("good", background="#D5F5E3", foreground="#196F3D")
 
     # --------------------------------------------------------------------------
-    # UI INCERTITUDES / OPERET (ADMIN SEULEMENT)
+    # UI INCERTITUDES / OPERET (ADMIN)
     # --------------------------------------------------------------------------
     def setup_incertitude_ui(self):
         top_i = ctk.CTkFrame(self.tab_incertitude, height=50, fg_color="#EAFAF1")
@@ -911,7 +971,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             tree.tag_configure("red", background="#FADBD8")
 
     # --------------------------------------------------------------------------
-    # UI DISTRIBUTION GAUSSIENNE (DOUBLE TABLEAU - ADMIN & USER)
+    # UI DISTRIBUTION GAUSSIENNE (DOUBLE TABLEAU)
     # --------------------------------------------------------------------------
     def setup_gauss_ui(self):
         top_g = ctk.CTkFrame(self.tab_gauss, height=60, fg_color="transparent")
@@ -940,8 +1000,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         for i, c in enumerate(cols_g):
             self.tree_gauss_direct.heading(c, text=c)
             w = 180 if i == 0 else 120
-            anc = "w" if i == 0 else "center"
-            self.tree_gauss_direct.column(c, width=w, anchor=anc)
+            self.tree_gauss_direct.column(c, width=w, anchor="w" if i == 0 else "center")
 
         vsb_g1 = ttk.Scrollbar(frame_g1, orient="vertical", command=self.tree_gauss_direct.yview)
         self.tree_gauss_direct.configure(yscrollcommand=vsb_g1.set)
@@ -961,8 +1020,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         for i, c in enumerate(cols_g):
             self.tree_gauss_pct.heading(c, text=c)
             w = 180 if i == 0 else 120
-            anc = "w" if i == 0 else "center"
-            self.tree_gauss_pct.column(c, width=w, anchor=anc)
+            self.tree_gauss_pct.column(c, width=w, anchor="w" if i == 0 else "center")
 
         vsb_g2 = ttk.Scrollbar(frame_g2, orient="vertical", command=self.tree_gauss_pct.yview)
         self.tree_gauss_pct.configure(yscrollcommand=vsb_g2.set)
@@ -970,7 +1028,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree_gauss_pct.pack(side="left", fill="both", expand=True)
         vsb_g2.pack(side="right", fill="y")
 
-        # Tags et Bindings
         for t in [self.tree_gauss_direct, self.tree_gauss_pct]:
             t.tag_configure("green", background="#D5F5E3", font=("Arial", 11))
             t.tag_configure("orange", background="#FDEBD0", font=("Arial", 11))
@@ -1035,6 +1092,8 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.tooltip_win = None
 
     def calculer_et_afficher_gauss(self):
+        if not hasattr(self, 'tree_gauss_direct'): return
+        
         self.tree_gauss_direct.delete(*self.tree_gauss_direct.get_children())
         self.tree_gauss_pct.delete(*self.tree_gauss_pct.get_children())
         
@@ -1154,7 +1213,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.tree_gauss_pct.insert("", "end", values=row_vals_pct, tags=(interval_tags[i],))
 
     # --------------------------------------------------------------------------
-    # LOGIQUE INCERTITUDES (ADMIN)
+    # LOGIQUE INCERTITUDES
     # --------------------------------------------------------------------------
     def calculer_et_afficher_incertitudes(self):
         if not hasattr(self, 'tree_ten'): return
@@ -1203,7 +1262,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                 self.tree_iepe.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_iepe:.4f}", f"{e_iepe_mse:.4f}", f"{im_iepe:.4f}", dec_i), tags=(tag_i,))
 
     # --------------------------------------------------------------------------
-    # LOGIQUES COMMUNES ET PROCESSUS
+    # LOGIQUES COMMUNES
     # --------------------------------------------------------------------------
     def parse_float(self, val):
         try: return float(str(val).replace(',', '.').replace('⚠️ ', ''))
