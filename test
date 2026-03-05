@@ -73,8 +73,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.gauss_details_pct = {}
         self.tooltip_win = None
         
-        self.mode = None # "admin" ou "user"
-        
+        self.mode = None 
         self.afficher_ecran_connexion()
 
     # --------------------------------------------------------------------------
@@ -137,6 +136,8 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.setup_accueil_user_ui()
             self.setup_gauss_ui()
             self.setup_comparaison_ui()
+            
+        self.update_queue_label()
 
     def retour_accueil(self):
         if messagebox.askyesno("Changer de profil", "Voulez-vous retourner à l'écran de sélection ? (Vos fichiers en file d'attente seront conservés)"):
@@ -144,16 +145,16 @@ class AnalyseurFiltresApp(ctk.CTk):
                 self.top_bar.destroy()
             if hasattr(self, 'tabview') and self.tabview:
                 self.tabview.destroy()
+            self.mode = None
             self.afficher_ecran_connexion()
 
     # --------------------------------------------------------------------------
-    # UI OPÉRATEUR (SIMPLIFIÉE AVEC MODIFICATION)
+    # UI OPÉRATEUR
     # --------------------------------------------------------------------------
     def setup_accueil_user_ui(self):
         self.tab_accueil.grid_columnconfigure(1, weight=1)
         self.tab_accueil.grid_rowconfigure(1, weight=1)
 
-        # Header: Boutons
         top = ctk.CTkFrame(self.tab_accueil, height=60, fg_color="transparent")
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
         
@@ -169,7 +170,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.btn_run_user = ctk.CTkButton(top, text="▶ LANCER L'ANALYSE", command=self.lancer_thread, fg_color="#1565C0", font=("Arial", 14, "bold"), height=35)
         self.btn_run_user.pack(side="right", padx=10)
 
-        # Left Column: Fichiers Chargés
         left_fr = ctk.CTkFrame(self.tab_accueil, width=250, fg_color="white")
         left_fr.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
         
@@ -177,11 +177,9 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.user_file_list = tk.Listbox(left_fr, font=("Arial", 10), selectbackground="#D6EAF8")
         self.user_file_list.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # Right Column: Tolérances & Bilan
         right_fr = ctk.CTkFrame(self.tab_accueil, fg_color="transparent")
         right_fr.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
         
-        # Tolérances
         tols_fr = ctk.CTkFrame(right_fr, fg_color="#E6F0FA")
         tols_fr.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(tols_fr, text="Tolérances Actives (Double-cliquez sur une valeur pour la modifier)", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=5)
@@ -194,7 +192,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tv_tols_user.pack(fill="x", padx=10, pady=(0, 10))
         self.tv_tols_user.bind("<Double-1>", self.modifier_tolerance_user)
 
-        # Zone Bilan
         bilan_fr = ctk.CTkFrame(right_fr, fg_color="white", border_width=2, border_color="#BDC3C7")
         bilan_fr.pack(fill="both", expand=True)
         
@@ -215,30 +212,27 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.user_nok_tree.pack(side="left", fill="both", expand=True, padx=(10,0), pady=10)
         vsb_nok.pack(side="right", fill="y", pady=10, padx=(0,10))
 
-        # CORRECTION : On utilise grid_remove pour gérer l'affichage de la barre dans l'environnement grid
         self.progress_user = ctk.CTkProgressBar(self.tab_accueil)
         self.progress_user.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
         self.progress_user.grid_remove()
 
     def rafraichir_tableau_tolerances_user(self):
+        if not hasattr(self, 'tv_tols_user'): return
         self.tv_tols_user.delete(*self.tv_tols_user.get_children())
         tols_operet = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
         for f_k in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
             for m_k in ["TENSION", "IEPE"]:
                 t = tols_operet[f_k][m_k]
-                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"{t['Gain']}", f"{t['MSE']}", f"{t['Ig']}"))
+                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"±{t['Gain']}%", f"{t['MSE']}%", f"{t['Ig']}%"))
 
     def modifier_tolerance_user(self, event):
         item = self.tv_tols_user.identify_row(event.y)
         col = self.tv_tols_user.identify_column(event.x)
         
-        if not item or col not in ["#3", "#4", "#5"]:
-            return
+        if not item or col not in ["#3", "#4", "#5"]: return
             
         vals = self.tv_tols_user.item(item, "values")
-        filt_key = vals[0]
-        mode_key = vals[1]
-        
+        filt_key = vals[0]; mode_key = vals[1]
         param_map = {"#3": "Gain", "#4": "MSE", "#5": "Ig"}
         param_key = param_map[col]
         
@@ -249,7 +243,6 @@ class AnalyseurFiltresApp(ctk.CTk):
             try:
                 new_float = float(new_val.replace(',', '.'))
                 self.regles_actives["OPERET"][filt_key][mode_key][param_key] = new_float
-                
                 with open(FICHIER_CONFIG, 'w') as f:
                     json.dump(self.regles_actives, f, indent=4)
                     
@@ -257,51 +250,53 @@ class AnalyseurFiltresApp(ctk.CTk):
                 if self.db_lignes:
                     self.calculer_bilan_user()
                     self.calculer_et_afficher_gauss()
-                    
             except ValueError:
                 messagebox.showerror("Erreur", "Valeur invalide. Veuillez entrer un nombre valide.")
 
     def calculer_bilan_user(self):
-        self.user_nok_tree.delete(*self.user_nok_tree.get_children())
-        TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
-        
-        noks = []
-        for row in self.db_lignes:
-            filt_name = str(row["Filter"]).upper()
-            if "BESSEL" in filt_name: filt_key = "BESSEL"
-            elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
-            else: filt_key = "WIDEBAND"
+        if self.mode != "user": return
+        try:
+            self.user_nok_tree.delete(*self.user_nok_tree.get_children())
+            TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
+            noks = []
             
-            f_name = row['Fichier']
-            if len(f_name) > 20: f_name = f_name[:17] + "..."
-            inp = row.get('Input', '?')
-            
-            if filt_key in ["BESSEL", "BUTTERWORTH"]:
-                tols = TOLS[filt_key]["TENSION"]
-                g_t = self.parse_float(row.get("DCGain"))
-                e_t = self.parse_float(row.get("MSE"))
-                im_t = 2 * math.sqrt(g_t**2 + e_t**2)
+            for row in self.db_lignes:
+                filt_name = str(row["Filter"]).upper()
+                if "BESSEL" in filt_name: filt_key = "BESSEL"
+                elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
+                else: filt_key = "WIDEBAND"
                 
-                if abs(g_t) > tols["Gain"]: noks.append((f_name, inp, f"TENSION ({filt_key})", "Gain", f"{g_t:.4f}%", f"±{tols['Gain']}%"))
-                if abs(e_t) > tols["MSE"]: noks.append((f_name, inp, f"TENSION ({filt_key})", "MSE", f"{e_t:.4f}%", f"{tols['MSE']}%"))
-                if im_t > tols["Ig"]: noks.append((f_name, inp, f"TENSION ({filt_key})", "I/M", f"{im_t:.4f}%", f"{tols['Ig']}%"))
-            
-            if filt_key == "WIDEBAND":
-                tols = TOLS[filt_key]["IEPE"]
-                g_i = self.parse_float(row.get("IEPE Gain"))
-                e_i = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
-                im_i = 2 * math.sqrt(g_i**2 + e_i**2)
+                f_name = row['Fichier']
+                if len(f_name) > 20: f_name = f_name[:17] + "..."
+                inp = row.get('Input', '?')
                 
-                if abs(g_i) > tols["Gain"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "Gain", f"{g_i:.4f}%", f"±{tols['Gain']}%"))
-                if abs(e_i) > tols["MSE"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "MSE", f"{e_i:.4f}%", f"{tols['MSE']}%"))
-                if im_i > tols["Ig"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "I/M", f"{im_i:.4f}%", f"{tols['Ig']}%"))
+                if filt_key in ["BESSEL", "BUTTERWORTH"]:
+                    tols = TOLS[filt_key]["TENSION"]
+                    g_t = self.parse_float(row.get("DCGain"))
+                    e_t = self.parse_float(row.get("MSE"))
+                    im_t = 2 * math.sqrt(g_t**2 + e_t**2)
+                    
+                    if abs(g_t) > tols["Gain"]: noks.append((f_name, inp, f"TENSION ({filt_key})", "Gain", f"{g_t:.4f}%", f"±{tols['Gain']}%"))
+                    if abs(e_t) > tols["MSE"]: noks.append((f_name, inp, f"TENSION ({filt_key})", "MSE", f"{e_t:.4f}%", f"{tols['MSE']}%"))
+                    if im_t > tols["Ig"]: noks.append((f_name, inp, f"TENSION ({filt_key})", "I/M", f"{im_t:.4f}%", f"{tols['Ig']}%"))
+                
+                if filt_key == "WIDEBAND":
+                    tols = TOLS[filt_key]["IEPE"]
+                    g_i = self.parse_float(row.get("IEPE Gain"))
+                    e_i = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
+                    im_i = 2 * math.sqrt(g_i**2 + e_i**2)
+                    
+                    if abs(g_i) > tols["Gain"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "Gain", f"{g_i:.4f}%", f"±{tols['Gain']}%"))
+                    if abs(e_i) > tols["MSE"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "MSE", f"{e_i:.4f}%", f"{tols['MSE']}%"))
+                    if im_i > tols["Ig"]: noks.append((f_name, inp, "IEPE (WIDEBAND)", "I/M", f"{im_i:.4f}%", f"{tols['Ig']}%"))
 
-        if not noks:
-            self.lbl_bilan_status.configure(text="✅ TOUS LES CAPTEURS SONT CONFORMES (ZÉRO DÉFAUT)", text_color="#196F3D")
-        else:
-            self.lbl_bilan_status.configure(text=f"❌ ATTENTION : {len(noks)} DÉFAUT(S) DÉTECTÉ(S)", text_color="#C0392B")
-            for n in noks:
-                self.user_nok_tree.insert("", "end", values=n, tags=("red",))
+            if not noks:
+                self.lbl_bilan_status.configure(text="✅ TOUS LES CAPTEURS SONT CONFORMES (ZÉRO DÉFAUT)", text_color="#196F3D")
+            else:
+                self.lbl_bilan_status.configure(text=f"❌ ATTENTION : {len(noks)} DÉFAUT(S) DÉTECTÉ(S)", text_color="#C0392B")
+                for n in noks:
+                    self.user_nok_tree.insert("", "end", values=n, tags=("red",))
+        except Exception as e: print(f"Erreur bilan: {e}")
 
     # --------------------------------------------------------------------------
     # CONFIGURATION (ADMIN)
@@ -485,15 +480,15 @@ class AnalyseurFiltresApp(ctk.CTk):
     # LOGIQUE DE LA FILE D'ATTENTE
     # --------------------------------------------------------------------------
     def update_queue_label(self):
-        if hasattr(self, 'lbl_queue') and self.lbl_queue.winfo_exists():
-            self.lbl_queue.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
-        if hasattr(self, 'lbl_queue_user') and self.lbl_queue_user.winfo_exists():
-            self.lbl_queue_user.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
-        
-        if hasattr(self, 'user_file_list') and self.user_file_list.winfo_exists():
-            self.user_file_list.delete(0, tk.END)
-            for f in self.fichiers_selectionnes:
-                self.user_file_list.insert(tk.END, os.path.basename(f))
+        try:
+            if self.mode == "admin" and hasattr(self, 'lbl_queue'):
+                self.lbl_queue.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
+            elif self.mode == "user" and hasattr(self, 'lbl_queue_user'):
+                self.lbl_queue_user.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
+                self.user_file_list.delete(0, tk.END)
+                for f in self.fichiers_selectionnes:
+                    self.user_file_list.insert(tk.END, os.path.basename(f))
+        except: pass
 
     def choisir_fichiers(self):
         fs = filedialog.askopenfilenames(filetypes=[("PDF", "*.pdf")])
@@ -640,7 +635,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
 
     # --------------------------------------------------------------------------
-    # UI COMPARAISON (THÈME BLEU ARIANE)
+    # UI COMPARAISON
     # --------------------------------------------------------------------------
     def setup_comparaison_ui(self):
         top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
@@ -885,7 +880,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                     tv.insert("", "end", values=(key[0], key[1], p_label, v1_str, v2_str, "Incomplet"), tags=("neutral",))
 
     # --------------------------------------------------------------------------
-    # UI RAPPORT MANQUANTS
+    # UI RAPPORT MANQUANTS (ADMIN)
     # --------------------------------------------------------------------------
     def setup_missing_ui(self):
         top_m = ctk.CTkFrame(self.tab_manquants, height=50, fg_color="transparent")
@@ -910,7 +905,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree_missing.tag_configure("good", background="#D5F5E3", foreground="#196F3D")
 
     # --------------------------------------------------------------------------
-    # UI INCERTITUDES / OPERET
+    # UI INCERTITUDES / OPERET (ADMIN)
     # --------------------------------------------------------------------------
     def setup_incertitude_ui(self):
         top_i = ctk.CTkFrame(self.tab_incertitude, height=50, fg_color="#EAFAF1")
@@ -963,7 +958,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             tree.tag_configure("red", background="#FADBD8")
 
     # --------------------------------------------------------------------------
-    # UI DISTRIBUTION GAUSSIENNE (DOUBLE TABLEAU)
+    # UI DISTRIBUTION GAUSSIENNE (DOUBLE TABLEAU - ADMIN & USER)
     # --------------------------------------------------------------------------
     def setup_gauss_ui(self):
         top_g = ctk.CTkFrame(self.tab_gauss, height=60, fg_color="transparent")
@@ -1022,6 +1017,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree_gauss_pct.pack(side="left", fill="both", expand=True)
         vsb_g2.pack(side="right", fill="y")
 
+        # Tags et Bindings
         for t in [self.tree_gauss_direct, self.tree_gauss_pct]:
             t.tag_configure("green", background="#D5F5E3", font=("Arial", 11))
             t.tag_configure("orange", background="#FDEBD0", font=("Arial", 11))
@@ -1086,10 +1082,12 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.tooltip_win = None
 
     def calculer_et_afficher_gauss(self):
-        if not hasattr(self, 'tree_gauss_direct') or not self.tree_gauss_direct.winfo_exists(): return
-        
-        self.tree_gauss_direct.delete(*self.tree_gauss_direct.get_children())
-        self.tree_gauss_pct.delete(*self.tree_gauss_pct.get_children())
+        try:
+            if not hasattr(self, 'tree_gauss_direct') or not self.tree_gauss_direct.winfo_exists(): return
+            
+            self.tree_gauss_direct.delete(*self.tree_gauss_direct.get_children())
+            self.tree_gauss_pct.delete(*self.tree_gauss_pct.get_children())
+        except: return
         
         TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
         params = ["Tension Gain", "Tension MSE", "Tension I/M", "IEPE Gain", "IEPE MSE", "IEPE I/M"]
@@ -1139,13 +1137,9 @@ class AnalyseurFiltresApp(ctk.CTk):
                 im_t = 2 * math.sqrt(g_t**2 + e_t**2)
                 
                 # Direct
-                p_gt_dir = g_t
-                p_et_dir = e_t
-                p_imt_dir = im_t
-                
-                idx = get_bin_index(p_gt_dir); bins_dir["Tension Gain"][idx] += 1; self.gauss_details_direct["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
-                idx = get_bin_index(p_et_dir); bins_dir["Tension MSE"][idx] += 1; self.gauss_details_direct["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
-                idx = get_bin_index(p_imt_dir); bins_dir["Tension I/M"][idx] += 1; self.gauss_details_direct["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
+                idx = get_bin_index(g_t); bins_dir["Tension Gain"][idx] += 1; self.gauss_details_direct["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
+                idx = get_bin_index(e_t); bins_dir["Tension MSE"][idx] += 1; self.gauss_details_direct["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
+                idx = get_bin_index(im_t); bins_dir["Tension I/M"][idx] += 1; self.gauss_details_direct["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
                 
                 # Percentage
                 p_gt_pct = (g_t / tols_t["Gain"]) * 100 if tols_t["Gain"] else 0
@@ -1163,13 +1157,9 @@ class AnalyseurFiltresApp(ctk.CTk):
                 im_i = 2 * math.sqrt(g_i**2 + e_i**2)
                 
                 # Direct
-                p_gi_dir = g_i
-                p_ei_dir = e_i
-                p_imi_dir = im_i
-                
-                idx = get_bin_index(p_gi_dir); bins_dir["IEPE Gain"][idx] += 1; self.gauss_details_direct["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
-                idx = get_bin_index(p_ei_dir); bins_dir["IEPE MSE"][idx] += 1; self.gauss_details_direct["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
-                idx = get_bin_index(p_imi_dir); bins_dir["IEPE I/M"][idx] += 1; self.gauss_details_direct["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
+                idx = get_bin_index(g_i); bins_dir["IEPE Gain"][idx] += 1; self.gauss_details_direct["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
+                idx = get_bin_index(e_i); bins_dir["IEPE MSE"][idx] += 1; self.gauss_details_direct["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
+                idx = get_bin_index(im_i); bins_dir["IEPE I/M"][idx] += 1; self.gauss_details_direct["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
                 
                 # Percentage
                 p_gi_pct = (g_i / tols_i["Gain"]) * 100 if tols_i["Gain"] else 0
@@ -1210,53 +1200,54 @@ class AnalyseurFiltresApp(ctk.CTk):
     # LOGIQUE INCERTITUDES
     # --------------------------------------------------------------------------
     def calculer_et_afficher_incertitudes(self):
-        if not hasattr(self, 'tree_ten') or not self.tree_ten.winfo_exists(): return
-        
-        self.tree_ten.delete(*self.tree_ten.get_children())
-        self.tree_iepe.delete(*self.tree_iepe.get_children())
-        
-        TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
-
-        for row in self.db_lignes:
-            if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
-
-            filt_name = str(row["Filter"]).upper()
-            if "BESSEL" in filt_name: filt_key = "BESSEL"
-            elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
-            else: filt_key = "WIDEBAND"
+        if self.mode != "admin": return
+        try:
+            self.tree_ten.delete(*self.tree_ten.get_children())
+            self.tree_iepe.delete(*self.tree_iepe.get_children())
             
-            if filt_key in ["BESSEL", "BUTTERWORTH"]:
-                tols_ten = TOLS[filt_key]["TENSION"]
-                g_ten = self.parse_float(row.get("DCGain"))
-                e_ten = self.parse_float(row.get("MSE"))
-                im_ten = 2 * math.sqrt(g_ten**2 + e_ten**2)
-                
-                fails_ten = []
-                if abs(g_ten) > tols_ten["Gain"]: fails_ten.append("Gain")
-                if abs(e_ten) > tols_ten["MSE"]: fails_ten.append("MSE")
-                if im_ten > tols_ten["Ig"]: fails_ten.append("I/M")
-                
-                tag_t = "red" if fails_ten else "green"
-                dec_t = f"NOK: {', '.join(fails_ten)}" if fails_ten else "OK"
-                self.tree_ten.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_ten:.4f}", f"{e_ten:.4f}", f"{im_ten:.4f}", dec_t), tags=(tag_t,))
+            TOLS = self.regles_actives.get("OPERET", DEFAUT_TOLERANCES_OPERET)
 
-            if filt_key == "WIDEBAND":
-                tols_iepe = TOLS[filt_key]["IEPE"]
-                g_iepe = self.parse_float(row.get("IEPE Gain"))
-                e_iepe_mse = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
-                im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe_mse**2)
+            for row in self.db_lignes:
+                if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
+
+                filt_name = str(row["Filter"]).upper()
+                if "BESSEL" in filt_name: filt_key = "BESSEL"
+                elif "BUTTERWORTH" in filt_name: filt_key = "BUTTERWORTH"
+                else: filt_key = "WIDEBAND"
                 
-                fails_iepe = []
-                if abs(g_iepe) > tols_iepe["Gain"]: fails_iepe.append("Gain")
-                if abs(e_iepe_mse) > tols_iepe["MSE"]: fails_iepe.append("MSE")
-                if im_iepe > tols_iepe["Ig"]: fails_iepe.append("I/M")
-                
-                tag_i = "red" if fails_iepe else "green"
-                dec_i = f"NOK: {', '.join(fails_iepe)}" if fails_iepe else "OK"
-                self.tree_iepe.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_iepe:.4f}", f"{e_iepe_mse:.4f}", f"{im_iepe:.4f}", dec_i), tags=(tag_i,))
+                if filt_key in ["BESSEL", "BUTTERWORTH"]:
+                    tols_ten = TOLS[filt_key]["TENSION"]
+                    g_ten = self.parse_float(row.get("DCGain"))
+                    e_ten = self.parse_float(row.get("MSE"))
+                    im_ten = 2 * math.sqrt(g_ten**2 + e_ten**2)
+                    
+                    fails_ten = []
+                    if abs(g_ten) > tols_ten["Gain"]: fails_ten.append("Gain")
+                    if abs(e_ten) > tols_ten["MSE"]: fails_ten.append("MSE")
+                    if im_ten > tols_ten["Ig"]: fails_ten.append("I/M")
+                    
+                    tag_t = "red" if fails_ten else "green"
+                    dec_t = f"NOK: {', '.join(fails_ten)}" if fails_ten else "OK"
+                    self.tree_ten.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_ten:.4f}", f"{e_ten:.4f}", f"{im_ten:.4f}", dec_t), tags=(tag_t,))
+
+                if filt_key == "WIDEBAND":
+                    tols_iepe = TOLS[filt_key]["IEPE"]
+                    g_iepe = self.parse_float(row.get("IEPE Gain"))
+                    e_iepe_mse = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
+                    im_iepe = 2 * math.sqrt(g_iepe**2 + e_iepe_mse**2)
+                    
+                    fails_iepe = []
+                    if abs(g_iepe) > tols_iepe["Gain"]: fails_iepe.append("Gain")
+                    if abs(e_iepe_mse) > tols_iepe["MSE"]: fails_iepe.append("MSE")
+                    if im_iepe > tols_iepe["Ig"]: fails_iepe.append("I/M")
+                    
+                    tag_i = "red" if fails_iepe else "green"
+                    dec_i = f"NOK: {', '.join(fails_iepe)}" if fails_iepe else "OK"
+                    self.tree_iepe.insert("", "end", values=(row["Fichier"], row["Filter"], row["Input"], f"{g_iepe:.4f}", f"{e_iepe_mse:.4f}", f"{im_iepe:.4f}", dec_i), tags=(tag_i,))
+        except Exception as e: print(e)
 
     # --------------------------------------------------------------------------
-    # LOGIQUES COMMUNES
+    # LOGIQUES COMMUNES ET PROCESSUS
     # --------------------------------------------------------------------------
     def parse_float(self, val):
         try: return float(str(val).replace(',', '.').replace('⚠️ ', ''))
@@ -1324,37 +1315,41 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top, text="VALIDER", command=valider).pack(pady=10)
 
     def appliquer_filtres_visuels(self, event):
-        if not hasattr(self, 'tree') or not self.tree.winfo_exists(): return
-        self.tree.delete(*self.tree.get_children())
-        f_type = self.var_filter_type.get()
-        for row in self.db_lignes:
-            if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
-            if f_type != "Tous les filtres" and row["Filter"] != f_type: continue
-            vals = [row["uuid"]] + [row.get(c, "") for c in ["Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER]
-            self.tree.insert("", "end", values=vals, tags=(row["tag"],))
-        if event:
-            self.calculer_et_afficher_incertitudes()
-            self.calculer_et_afficher_gauss()
+        if self.mode != "admin": return
+        try:
+            self.tree.delete(*self.tree.get_children())
+            f_type = self.var_filter_type.get()
+            for row in self.db_lignes:
+                if self.fichiers_visibles_set and row["Fichier"] not in self.fichiers_visibles_set: continue
+                if f_type != "Tous les filtres" and row["Filter"] != f_type: continue
+                vals = [row["uuid"]] + [row.get(c, "") for c in ["Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER]
+                self.tree.insert("", "end", values=vals, tags=(row["tag"],))
+            if event:
+                self.calculer_et_afficher_incertitudes()
+                self.calculer_et_afficher_gauss()
+        except Exception as e: print(e)
 
     def verifier_integrite_inputs(self):
-        if not hasattr(self, 'tree_missing') or not self.tree_missing.winfo_exists(): return
-        self.tree_missing.delete(*self.tree_missing.get_children())
-        target_max = int(self.regles_actives.get("Nb_Inputs_Max", [8.0])[0])
-        data = {}
-        for row in self.db_lignes:
-            f, filt = row["Fichier"], row["Filter"]
-            try: inp = int(re.search(r'(\d+)', str(row["Input"])).group(1))
-            except: continue
-            if f not in data: data[f] = {}
-            if filt not in data[f]: data[f][filt] = []
-            data[f][filt].append(inp)
-        
-        if not data: self.tree_missing.insert("", "end", values=("AUCUNE DONNÉE", "-", "-"), tags=("miss",)); return
-        for f, filtres in data.items():
-            for filt, inputs in filtres.items():
-                missing = sorted(list(set(range(1, target_max + 1)) - set(inputs)))
-                if missing: self.tree_missing.insert("", "end", values=(f, filt, f"MANQUE: {missing}"), tags=("miss",))
-                else: self.tree_missing.insert("", "end", values=(f, filt, f"COMPLET (1-{target_max})"), tags=("good",))
+        if self.mode != "admin": return
+        try:
+            self.tree_missing.delete(*self.tree_missing.get_children())
+            target_max = int(self.regles_actives.get("Nb_Inputs_Max", [8.0])[0])
+            data = {}
+            for row in self.db_lignes:
+                f, filt = row["Fichier"], row["Filter"]
+                try: inp = int(re.search(r'(\d+)', str(row["Input"])).group(1))
+                except: continue
+                if f not in data: data[f] = {}
+                if filt not in data[f]: data[f][filt] = []
+                data[f][filt].append(inp)
+            
+            if not data: self.tree_missing.insert("", "end", values=("AUCUNE DONNÉE", "-", "-"), tags=("miss",)); return
+            for f, filtres in data.items():
+                for filt, inputs in filtres.items():
+                    missing = sorted(list(set(range(1, target_max + 1)) - set(inputs)))
+                    if missing: self.tree_missing.insert("", "end", values=(f, filt, f"MANQUE: {missing}"), tags=("miss",))
+                    else: self.tree_missing.insert("", "end", values=(f, filt, f"COMPLET (1-{target_max})"), tags=("good",))
+        except Exception as e: print(e)
 
     def supprimer_selection(self):
         sel = self.tree.selection()
@@ -1408,21 +1403,22 @@ class AnalyseurFiltresApp(ctk.CTk):
 
     def update_combos_fichiers(self):
         f = list(set([r["Fichier"] for r in self.db_lignes]))
-        if hasattr(self, 'cb_file') and self.cb_file.winfo_exists():
-            self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
+        if hasattr(self, 'cb_file') and getattr(self, 'cb_file', None):
+            try: self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
+            except: pass
 
     def lancer_thread(self):
         if self.fichiers_selectionnes:
-            if hasattr(self, 'btn_run') and self.btn_run.winfo_exists(): 
-                self.btn_run.configure(state="disabled")
-            if hasattr(self, 'btn_run_user') and self.btn_run_user.winfo_exists(): 
-                self.btn_run_user.configure(state="disabled")
-            
-            if hasattr(self, 'progress') and self.progress.winfo_exists(): 
-                self.progress.pack(side="bottom", fill="x")
-            if hasattr(self, 'progress_user') and self.progress_user.winfo_exists(): 
-                self.progress_user.grid() 
-            
+            try:
+                if self.mode == "admin":
+                    self.btn_run.configure(state="disabled")
+                    self.progress.pack(side="bottom", fill="x")
+                elif self.mode == "user":
+                    self.btn_run_user.configure(state="disabled")
+                    self.progress_user.grid()
+            except Exception as e:
+                print(e)
+                
             threading.Thread(target=self.process, daemon=True).start()
         else:
             messagebox.showwarning("Vide", "Veuillez d'abord sélectionner des fichiers ou un dossier.")
@@ -1503,36 +1499,34 @@ class AnalyseurFiltresApp(ctk.CTk):
                 
                 self.db_lignes.append(row_c)
                 
-                # N'affiche la ligne en direct QUE si l'arbre administrateur existe
-                if hasattr(self, 'tree') and self.tree.winfo_exists():
-                    vals = [row_c["uuid"]] + [row_c.get(c, "") for c in ["Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER]
-                    self.after(0, lambda v=vals, t=tag: self.tree.insert("", "end", values=v, tags=(t,)))
+                if self.mode == "admin":
+                    try:
+                        vals = [row_c["uuid"]] + [row_c.get(c, "") for c in ["Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER]
+                        self.after(0, lambda v=vals, t=tag: self.tree.insert("", "end", values=v, tags=(t,)))
+                    except: pass
                 
-            if hasattr(self, 'progress') and self.progress.winfo_exists(): 
-                self.after(0, self.progress.set, (idx+1)/total)
-            if hasattr(self, 'progress_user') and self.progress_user.winfo_exists(): 
-                self.after(0, self.progress_user.set, (idx+1)/total)
+            try:
+                if self.mode == "admin":
+                    self.after(0, self.progress.set, (idx+1)/total)
+                elif self.mode == "user":
+                    self.after(0, self.progress_user.set, (idx+1)/total)
+            except: pass
         
         self.after(0, self.finish)
 
     def finish(self):
-        if hasattr(self, 'btn_run') and self.btn_run.winfo_exists(): 
-            self.btn_run.configure(state="normal")
-        if hasattr(self, 'btn_run_user') and self.btn_run_user.winfo_exists(): 
-            self.btn_run_user.configure(state="normal")
-        
-        if hasattr(self, 'progress') and self.progress.winfo_exists(): 
-            self.progress.pack_forget()
-        if hasattr(self, 'progress_user') and self.progress_user.winfo_exists(): 
-            self.progress_user.grid_remove()
-        
-        self.update_combos_fichiers()
-        
-        if self.mode == "admin":
-            self.appliquer_filtres_visuels(None) 
-            self.after(500, lambda: [self.verifier_integrite_inputs(), self.calculer_et_afficher_incertitudes(), self.calculer_et_afficher_gauss()])
-        else:
-            self.after(500, lambda: [self.calculer_bilan_user(), self.calculer_et_afficher_gauss()])
+        try:
+            if self.mode == "admin":
+                self.btn_run.configure(state="normal")
+                self.progress.pack_forget()
+                self.update_combos_fichiers()
+                self.appliquer_filtres_visuels(None) 
+                self.after(500, lambda: [self.verifier_integrite_inputs(), self.calculer_et_afficher_incertitudes(), self.calculer_et_afficher_gauss()])
+            elif self.mode == "user":
+                self.btn_run_user.configure(state="normal")
+                self.progress_user.grid_remove()
+                self.after(500, lambda: [self.calculer_bilan_user(), self.calculer_et_afficher_gauss()])
+        except Exception as e: print(f"Erreur Finish: {e}")
 
 if __name__ == "__main__":
     app = AnalyseurFiltresApp()
