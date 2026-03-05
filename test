@@ -75,7 +75,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         self.mode = None # "admin" ou "user"
         
-        # Affiche l'écran de connexion au lancement
         self.afficher_ecran_connexion()
 
     # --------------------------------------------------------------------------
@@ -103,7 +102,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.mode = mode
         self.login_frame.destroy()
         
-        # --- BARRE SUPÉRIEURE (GLOBALE) ---
         self.top_bar = ctk.CTkFrame(self, fg_color="transparent", height=40)
         self.top_bar.pack(fill="x", padx=10, pady=(10, 0))
         
@@ -113,7 +111,6 @@ class AnalyseurFiltresApp(ctk.CTk):
         btn_retour = ctk.CTkButton(self.top_bar, text="🔄 Changer de profil", command=self.retour_accueil, fg_color="#F39C12", hover_color="#D68910", width=150)
         btn_retour.pack(side="right", padx=10)
         
-        # --- TABVIEW PRINCIPAL ---
         self.tabview = ctk.CTkTabview(self)
         self.tabview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
@@ -184,7 +181,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         right_fr = ctk.CTkFrame(self.tab_accueil, fg_color="transparent")
         right_fr.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
         
-        # --- NOUVEAU : TOLERANCES MODIFIABLES ---
+        # Tolérances
         tols_fr = ctk.CTkFrame(right_fr, fg_color="#E6F0FA")
         tols_fr.pack(fill="x", pady=(0, 10))
         ctk.CTkLabel(tols_fr, text="Tolérances Actives (Double-cliquez sur une valeur pour la modifier)", font=("Arial", 12, "bold"), text_color="#0033A0").pack(pady=5)
@@ -195,8 +192,6 @@ class AnalyseurFiltresApp(ctk.CTk):
             
         self.rafraichir_tableau_tolerances_user()
         self.tv_tols_user.pack(fill="x", padx=10, pady=(0, 10))
-        
-        # Binding pour modifier les tolérances
         self.tv_tols_user.bind("<Double-1>", self.modifier_tolerance_user)
 
         # Zone Bilan
@@ -220,9 +215,10 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.user_nok_tree.pack(side="left", fill="both", expand=True, padx=(10,0), pady=10)
         vsb_nok.pack(side="right", fill="y", pady=10, padx=(0,10))
 
+        # CORRECTION : On utilise grid_remove pour gérer l'affichage de la barre dans l'environnement grid
         self.progress_user = ctk.CTkProgressBar(self.tab_accueil)
         self.progress_user.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
-        self.progress_user.pack_forget()
+        self.progress_user.grid_remove()
 
     def rafraichir_tableau_tolerances_user(self):
         self.tv_tols_user.delete(*self.tv_tols_user.get_children())
@@ -230,13 +226,12 @@ class AnalyseurFiltresApp(ctk.CTk):
         for f_k in ["BESSEL", "BUTTERWORTH", "WIDEBAND"]:
             for m_k in ["TENSION", "IEPE"]:
                 t = tols_operet[f_k][m_k]
-                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"±{t['Gain']}%", f"{t['MSE']}%", f"{t['Ig']}%"))
+                self.tv_tols_user.insert("", "end", values=(f_k, m_k, f"{t['Gain']}", f"{t['MSE']}", f"{t['Ig']}"))
 
     def modifier_tolerance_user(self, event):
         item = self.tv_tols_user.identify_row(event.y)
         col = self.tv_tols_user.identify_column(event.x)
         
-        # On n'autorise la modification que sur les colonnes Gain, MSE, Ig (index #3, #4, #5)
         if not item or col not in ["#3", "#4", "#5"]:
             return
             
@@ -253,14 +248,11 @@ class AnalyseurFiltresApp(ctk.CTk):
         if new_val is not None:
             try:
                 new_float = float(new_val.replace(',', '.'))
-                # Mise à jour
                 self.regles_actives["OPERET"][filt_key][mode_key][param_key] = new_float
                 
-                # Sauvegarde sur le disque
                 with open(FICHIER_CONFIG, 'w') as f:
                     json.dump(self.regles_actives, f, indent=4)
                     
-                # Rafraîchir l'affichage et les bilans si des données sont chargées
                 self.rafraichir_tableau_tolerances_user()
                 if self.db_lignes:
                     self.calculer_bilan_user()
@@ -493,12 +485,12 @@ class AnalyseurFiltresApp(ctk.CTk):
     # LOGIQUE DE LA FILE D'ATTENTE
     # --------------------------------------------------------------------------
     def update_queue_label(self):
-        if hasattr(self, 'lbl_queue'):
+        if hasattr(self, 'lbl_queue') and self.lbl_queue.winfo_exists():
             self.lbl_queue.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
-        if hasattr(self, 'lbl_queue_user'):
+        if hasattr(self, 'lbl_queue_user') and self.lbl_queue_user.winfo_exists():
             self.lbl_queue_user.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
         
-        if hasattr(self, 'user_file_list'):
+        if hasattr(self, 'user_file_list') and self.user_file_list.winfo_exists():
             self.user_file_list.delete(0, tk.END)
             for f in self.fichiers_selectionnes:
                 self.user_file_list.insert(tk.END, os.path.basename(f))
@@ -648,7 +640,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top_ex, text="Valider & Enregistrer", command=valider_export, fg_color="#27AE60", height=40).pack(pady=30)
 
     # --------------------------------------------------------------------------
-    # UI COMPARAISON
+    # UI COMPARAISON (THÈME BLEU ARIANE)
     # --------------------------------------------------------------------------
     def setup_comparaison_ui(self):
         top_c = ctk.CTkFrame(self.tab_comparaison, height=60, fg_color="transparent")
@@ -656,7 +648,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         
         ctk.CTkLabel(top_c, text="Historique & Comparaison des Dérives", font=("Arial", 16, "bold"), text_color="#0033A0").pack(side="left")
         
-        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers (Ajustement)", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
+        ctk.CTkButton(top_c, text="⚖️ Comparer 2 Fichiers", font=("Arial", 12, "bold"), fg_color="#27AE60", hover_color="#1E8449", command=self.ouvrir_comparateur_delta).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Charger un Export (.json)", font=("Arial", 12, "bold"), fg_color="#0033A0", hover_color="#002277", command=self.charger_fichier_comparaison).pack(side="right", padx=10)
         ctk.CTkButton(top_c, text="Effacer", fg_color="#C0392B", width=80, command=self.effacer_comparaisons).pack(side="right", padx=5)
 
@@ -893,7 +885,7 @@ class AnalyseurFiltresApp(ctk.CTk):
                     tv.insert("", "end", values=(key[0], key[1], p_label, v1_str, v2_str, "Incomplet"), tags=("neutral",))
 
     # --------------------------------------------------------------------------
-    # UI RAPPORT MANQUANTS (ADMIN)
+    # UI RAPPORT MANQUANTS
     # --------------------------------------------------------------------------
     def setup_missing_ui(self):
         top_m = ctk.CTkFrame(self.tab_manquants, height=50, fg_color="transparent")
@@ -918,7 +910,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree_missing.tag_configure("good", background="#D5F5E3", foreground="#196F3D")
 
     # --------------------------------------------------------------------------
-    # UI INCERTITUDES / OPERET (ADMIN)
+    # UI INCERTITUDES / OPERET
     # --------------------------------------------------------------------------
     def setup_incertitude_ui(self):
         top_i = ctk.CTkFrame(self.tab_incertitude, height=50, fg_color="#EAFAF1")
@@ -1000,7 +992,8 @@ class AnalyseurFiltresApp(ctk.CTk):
         for i, c in enumerate(cols_g):
             self.tree_gauss_direct.heading(c, text=c)
             w = 180 if i == 0 else 120
-            self.tree_gauss_direct.column(c, width=w, anchor="w" if i == 0 else "center")
+            anc = "w" if i == 0 else "center"
+            self.tree_gauss_direct.column(c, width=w, anchor=anc)
 
         vsb_g1 = ttk.Scrollbar(frame_g1, orient="vertical", command=self.tree_gauss_direct.yview)
         self.tree_gauss_direct.configure(yscrollcommand=vsb_g1.set)
@@ -1020,7 +1013,8 @@ class AnalyseurFiltresApp(ctk.CTk):
         for i, c in enumerate(cols_g):
             self.tree_gauss_pct.heading(c, text=c)
             w = 180 if i == 0 else 120
-            self.tree_gauss_pct.column(c, width=w, anchor="w" if i == 0 else "center")
+            anc = "w" if i == 0 else "center"
+            self.tree_gauss_pct.column(c, width=w, anchor=anc)
 
         vsb_g2 = ttk.Scrollbar(frame_g2, orient="vertical", command=self.tree_gauss_pct.yview)
         self.tree_gauss_pct.configure(yscrollcommand=vsb_g2.set)
@@ -1092,7 +1086,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.tooltip_win = None
 
     def calculer_et_afficher_gauss(self):
-        if not hasattr(self, 'tree_gauss_direct'): return
+        if not hasattr(self, 'tree_gauss_direct') or not self.tree_gauss_direct.winfo_exists(): return
         
         self.tree_gauss_direct.delete(*self.tree_gauss_direct.get_children())
         self.tree_gauss_pct.delete(*self.tree_gauss_pct.get_children())
@@ -1216,7 +1210,7 @@ class AnalyseurFiltresApp(ctk.CTk):
     # LOGIQUE INCERTITUDES
     # --------------------------------------------------------------------------
     def calculer_et_afficher_incertitudes(self):
-        if not hasattr(self, 'tree_ten'): return
+        if not hasattr(self, 'tree_ten') or not self.tree_ten.winfo_exists(): return
         
         self.tree_ten.delete(*self.tree_ten.get_children())
         self.tree_iepe.delete(*self.tree_iepe.get_children())
@@ -1330,7 +1324,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         ctk.CTkButton(top, text="VALIDER", command=valider).pack(pady=10)
 
     def appliquer_filtres_visuels(self, event):
-        if not hasattr(self, 'tree'): return
+        if not hasattr(self, 'tree') or not self.tree.winfo_exists(): return
         self.tree.delete(*self.tree.get_children())
         f_type = self.var_filter_type.get()
         for row in self.db_lignes:
@@ -1343,7 +1337,7 @@ class AnalyseurFiltresApp(ctk.CTk):
             self.calculer_et_afficher_gauss()
 
     def verifier_integrite_inputs(self):
-        if not hasattr(self, 'tree_missing'): return
+        if not hasattr(self, 'tree_missing') or not self.tree_missing.winfo_exists(): return
         self.tree_missing.delete(*self.tree_missing.get_children())
         target_max = int(self.regles_actives.get("Nb_Inputs_Max", [8.0])[0])
         data = {}
@@ -1414,16 +1408,20 @@ class AnalyseurFiltresApp(ctk.CTk):
 
     def update_combos_fichiers(self):
         f = list(set([r["Fichier"] for r in self.db_lignes]))
-        if hasattr(self, 'cb_file'):
+        if hasattr(self, 'cb_file') and self.cb_file.winfo_exists():
             self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
 
     def lancer_thread(self):
         if self.fichiers_selectionnes:
-            if hasattr(self, 'btn_run'): self.btn_run.configure(state="disabled")
-            if hasattr(self, 'btn_run_user'): self.btn_run_user.configure(state="disabled")
+            if hasattr(self, 'btn_run') and self.btn_run.winfo_exists(): 
+                self.btn_run.configure(state="disabled")
+            if hasattr(self, 'btn_run_user') and self.btn_run_user.winfo_exists(): 
+                self.btn_run_user.configure(state="disabled")
             
-            if hasattr(self, 'progress'): self.progress.pack(fill="x")
-            if hasattr(self, 'progress_user'): self.progress_user.pack(fill="x")
+            if hasattr(self, 'progress') and self.progress.winfo_exists(): 
+                self.progress.pack(side="bottom", fill="x")
+            if hasattr(self, 'progress_user') and self.progress_user.winfo_exists(): 
+                self.progress_user.grid() 
             
             threading.Thread(target=self.process, daemon=True).start()
         else:
@@ -1505,17 +1503,28 @@ class AnalyseurFiltresApp(ctk.CTk):
                 
                 self.db_lignes.append(row_c)
                 
-            if hasattr(self, 'progress'): self.after(0, self.progress.set, (idx+1)/total)
-            if hasattr(self, 'progress_user'): self.after(0, self.progress_user.set, (idx+1)/total)
+                # N'affiche la ligne en direct QUE si l'arbre administrateur existe
+                if hasattr(self, 'tree') and self.tree.winfo_exists():
+                    vals = [row_c["uuid"]] + [row_c.get(c, "") for c in ["Fichier", "Filter", "Input", "Span", "Etat"] + COLONNES_A_AFFICHER]
+                    self.after(0, lambda v=vals, t=tag: self.tree.insert("", "end", values=v, tags=(t,)))
+                
+            if hasattr(self, 'progress') and self.progress.winfo_exists(): 
+                self.after(0, self.progress.set, (idx+1)/total)
+            if hasattr(self, 'progress_user') and self.progress_user.winfo_exists(): 
+                self.after(0, self.progress_user.set, (idx+1)/total)
         
         self.after(0, self.finish)
 
     def finish(self):
-        if hasattr(self, 'btn_run'): self.btn_run.configure(state="normal")
-        if hasattr(self, 'btn_run_user'): self.btn_run_user.configure(state="normal")
+        if hasattr(self, 'btn_run') and self.btn_run.winfo_exists(): 
+            self.btn_run.configure(state="normal")
+        if hasattr(self, 'btn_run_user') and self.btn_run_user.winfo_exists(): 
+            self.btn_run_user.configure(state="normal")
         
-        if hasattr(self, 'progress'): self.progress.pack_forget()
-        if hasattr(self, 'progress_user'): self.progress_user.pack_forget()
+        if hasattr(self, 'progress') and self.progress.winfo_exists(): 
+            self.progress.pack_forget()
+        if hasattr(self, 'progress_user') and self.progress_user.winfo_exists(): 
+            self.progress_user.grid_remove()
         
         self.update_combos_fichiers()
         
