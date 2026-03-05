@@ -69,7 +69,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.db_lignes = [] 
         self.fichiers_visibles_set = set()
         
-        # Structures séparées pour les deux tableaux gaussiens
+        # --- NOUVEAU: DEUX STRUCTURES POUR LES INFOS-BULLES ---
         self.gauss_details_direct = {}
         self.gauss_details_pct = {}
         self.tooltip_win = None
@@ -270,6 +270,9 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree.tag_configure("error", background="#FDEDED")
         self.tree.bind("<Double-1>", lambda event: self.editer_selection())
 
+    # --------------------------------------------------------------------------
+    # LOGIQUE DE LA FILE D'ATTENTE
+    # --------------------------------------------------------------------------
     def update_queue_label(self):
         if hasattr(self, 'lbl_queue'):
             self.lbl_queue.configure(text=f"File: {len(self.fichiers_selectionnes)} PDF")
@@ -767,8 +770,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         for i, c in enumerate(cols_g):
             self.tree_gauss_direct.heading(c, text=c)
             w = 180 if i == 0 else 120
-            anc = "w" if i == 0 else "center"
-            self.tree_gauss_direct.column(c, width=w, anchor=anc)
+            self.tree_gauss_direct.column(c, width=w, anchor="w" if i == 0 else "center")
 
         vsb_g1 = ttk.Scrollbar(frame_g1, orient="vertical", command=self.tree_gauss_direct.yview)
         self.tree_gauss_direct.configure(yscrollcommand=vsb_g1.set)
@@ -788,8 +790,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         for i, c in enumerate(cols_g):
             self.tree_gauss_pct.heading(c, text=c)
             w = 180 if i == 0 else 120
-            anc = "w" if i == 0 else "center"
-            self.tree_gauss_pct.column(c, width=w, anchor=anc)
+            self.tree_gauss_pct.column(c, width=w, anchor="w" if i == 0 else "center")
 
         vsb_g2 = ttk.Scrollbar(frame_g2, orient="vertical", command=self.tree_gauss_pct.yview)
         self.tree_gauss_pct.configure(yscrollcommand=vsb_g2.set)
@@ -797,7 +798,7 @@ class AnalyseurFiltresApp(ctk.CTk):
         self.tree_gauss_pct.pack(side="left", fill="both", expand=True)
         vsb_g2.pack(side="right", fill="y")
 
-        # Tags et Bindings pour les deux tableaux
+        # Tags et Bindings
         for t in [self.tree_gauss_direct, self.tree_gauss_pct]:
             t.tag_configure("green", background="#D5F5E3", font=("Arial", 11))
             t.tag_configure("orange", background="#FDEBD0", font=("Arial", 11))
@@ -912,16 +913,12 @@ class AnalyseurFiltresApp(ctk.CTk):
                 e_t = self.parse_float(row.get("MSE"))
                 im_t = 2 * math.sqrt(g_t**2 + e_t**2)
                 
-                # Direct
-                p_gt_dir = g_t
-                p_et_dir = e_t
-                p_imt_dir = im_t
+                # Valeurs Directes
+                idx = get_bin_index(g_t); bins_dir["Tension Gain"][idx] += 1; self.gauss_details_direct["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
+                idx = get_bin_index(e_t); bins_dir["Tension MSE"][idx] += 1; self.gauss_details_direct["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
+                idx = get_bin_index(im_t); bins_dir["Tension I/M"][idx] += 1; self.gauss_details_direct["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
                 
-                idx = get_bin_index(p_gt_dir); bins_dir["Tension Gain"][idx] += 1; self.gauss_details_direct["Tension Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_t:.4f}%")
-                idx = get_bin_index(p_et_dir); bins_dir["Tension MSE"][idx] += 1; self.gauss_details_direct["Tension MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_t:.4f}%")
-                idx = get_bin_index(p_imt_dir); bins_dir["Tension I/M"][idx] += 1; self.gauss_details_direct["Tension I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_t:.4f}%")
-                
-                # Percentage
+                # Pourcentage de la Tolérance
                 p_gt_pct = (g_t / tols_t["Gain"]) * 100 if tols_t["Gain"] else 0
                 p_et_pct = (e_t / tols_t["MSE"]) * 100 if tols_t["MSE"] else 0
                 p_imt_pct = (im_t / tols_t["Ig"]) * 100 if tols_t["Ig"] else 0
@@ -936,16 +933,12 @@ class AnalyseurFiltresApp(ctk.CTk):
                 e_i = self.parse_float(row.get("IEPE_MSE", row.get("MSE", 0.0))) 
                 im_i = 2 * math.sqrt(g_i**2 + e_i**2)
                 
-                # Direct
-                p_gi_dir = g_i
-                p_ei_dir = e_i
-                p_imi_dir = im_i
+                # Valeurs Directes
+                idx = get_bin_index(g_i); bins_dir["IEPE Gain"][idx] += 1; self.gauss_details_direct["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
+                idx = get_bin_index(e_i); bins_dir["IEPE MSE"][idx] += 1; self.gauss_details_direct["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
+                idx = get_bin_index(im_i); bins_dir["IEPE I/M"][idx] += 1; self.gauss_details_direct["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
                 
-                idx = get_bin_index(p_gi_dir); bins_dir["IEPE Gain"][idx] += 1; self.gauss_details_direct["IEPE Gain"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {g_i:.4f}%")
-                idx = get_bin_index(p_ei_dir); bins_dir["IEPE MSE"][idx] += 1; self.gauss_details_direct["IEPE MSE"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {e_i:.4f}%")
-                idx = get_bin_index(p_imi_dir); bins_dir["IEPE I/M"][idx] += 1; self.gauss_details_direct["IEPE I/M"][idx].append(f"Inp {inp} | {short_filt} | {f_name} ➔ {im_i:.4f}%")
-                
-                # Percentage
+                # Pourcentage de la Tolérance
                 p_gi_pct = (g_i / tols_i["Gain"]) * 100 if tols_i["Gain"] else 0
                 p_ei_pct = (e_i / tols_i["MSE"]) * 100 if tols_i["MSE"] else 0
                 p_imi_pct = (im_i / tols_i["Ig"]) * 100 if tols_i["Ig"] else 0
@@ -974,7 +967,6 @@ class AnalyseurFiltresApp(ctk.CTk):
             for p in params:
                 v_dir = bins_dir[p][i]
                 v_pct = bins_pct[p][i]
-                
                 row_vals_dir.append(str(v_dir) if v_dir > 0 else "-")
                 row_vals_pct.append(str(v_pct) if v_pct > 0 else "-")
                 
@@ -1169,8 +1161,18 @@ class AnalyseurFiltresApp(ctk.CTk):
         f = list(set([r["Fichier"] for r in self.db_lignes]))
         self.cb_file.configure(values=["Tous les fichiers"] + sorted(f))
 
+    def lancer_thread(self):
+        if self.fichiers_selectionnes:
+            self.btn_run.configure(state="disabled")
+            self.progress.pack(fill="x")
+            threading.Thread(target=self.process, daemon=True).start()
+        else:
+            messagebox.showinfo("Info", "Veuillez d'abord ajouter des fichiers (Fichiers ou Dossier).")
+
     def process(self):
         total = len(self.fichiers_selectionnes)
+        self.db_lignes = [] 
+        
         for idx, fpath in enumerate(self.fichiers_selectionnes):
             fname = os.path.basename(fpath)
             temp_buffer = {} 
